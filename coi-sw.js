@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LoneWolf4Blitzkrieg. Part of The Game of Life; see LICENSE.
 // Cross-origin isolation service worker for The Game of Life.
 // Multicore play needs SharedArrayBuffer, which browsers only allow on pages served with the
 // COOP and COEP headers. GitHub Pages can't set headers, so this worker adds them to every

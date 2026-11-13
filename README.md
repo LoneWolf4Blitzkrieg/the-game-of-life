@@ -76,3 +76,11 @@ await fetch('tools/ui-check.js').then(r => r.text()).then(t => (0, eval)(t)); aw
 It returns `{ passed, failed, notes }`; `failed` should be empty. Keep the tab visible while it runs, because hidden tabs pause animation.
 
 In testing with the default parameters (`node tools/balance.js 20 10 balanced`), the Balanced Savanna kept all five species alive for 10 years in 10 of 10 seeds, and for 20 years in 10 of 10 seeds. Extinctions can still happen, and that is part of the lesson: reintroduce the species with the inject tool.
+
+## License
+
+Copyright (C) 2026 LoneWolf4Blitzkrieg.
+
+The Game of Life is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed in the hope that it will be useful, but **without any warranty**; see the license for details.
+
+The pixel fonts (Press Start 2P and VT323) are loaded from Google Fonts and are licensed separately under the SIL Open Font License.

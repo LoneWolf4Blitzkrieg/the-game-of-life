@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LoneWolf4Blitzkrieg. Part of The Game of Life; see LICENSE.
 // Headless checks for the camera maths in <script id="camera-core">. Usage: node tools/test-camera.js
 const fs = require('fs'), path = require('path'), assert = require('node:assert/strict');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
