@@ -29,6 +29,8 @@ body{
 button,input{font:inherit;color:inherit}
 canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .px{font-family:var(--px)}
+/* The pixel font has no ☀ ☂ ♂ ♀ ⌕ glyphs; draw them with a system symbol font at a readable size. */
+.sym{font-family:'Segoe UI Symbol','Apple Symbols','DejaVu Sans','Noto Sans Symbols2',sans-serif;font-size:13px;line-height:1;vertical-align:-1px}
 #app{max-width:1500px;margin:0 auto;padding:10px 16px 24px;display:flex;flex-direction:column;gap:12px}
 
 /* ---------- 16-bit panels & buttons ---------- */
@@ -103,7 +105,8 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .sp-btn .nm{font-family:var(--px);font-size:9px;display:block;margin-bottom:3px}
 .sp-btn small{color:var(--muted);font-size:16px}
 .sp-btn .cnt{font-family:var(--px);font-size:9px;text-align:right;line-height:1.6}
-.sp-btn .cnt span{display:block;font-size:7px;color:var(--muted)}
+.sp-btn .cnt > span{display:block;font-size:7px;color:var(--muted)}
+.sp-btn .cnt .sym{font-size:11px}
 .sp-btn.inspect{grid-template-columns:36px 1fr}
 .sp-btn.inspect .ico{width:36px;height:36px;display:grid;place-items:center;font-family:var(--px);font-size:14px;color:var(--teal)}
 .hint{color:var(--muted);font-size:17px;margin:8px 0 0}
@@ -209,7 +212,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
     <h1 class="logo">THE GAME OF LIFE<small>PREDATOR · PREY · BALANCE</small></h1>
     <div class="chips">
       <span class="chip" id="chipDate">YEAR <b>1</b> · DAY <b>1</b></span>
-      <span class="chip" id="chipSeason">☂ WET SEASON</span>
+      <span class="chip" id="chipSeason"><span class="sym">☂</span> WET SEASON</span>
       <span class="chip" id="chipPop">ANIMALS <b>0</b></span>
     </div>
     <div class="controls">
@@ -241,7 +244,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 
     <aside class="side">
       <div class="panel">
-        <h2>INJECT A COUPLE <span style="color:var(--muted);font-size:7px">♂ + ♀</span></h2>
+        <h2>INJECT A COUPLE <span style="color:var(--muted);font-size:7px"><span class="sym male">♂</span> + <span class="sym female">♀</span></span></h2>
         <div class="sp-grid" id="spGrid"></div>
         <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect.</p>
       </div>
@@ -1620,11 +1623,11 @@ const DESC = [
 ];
 function buildSidebar() {
   const grid = $('#spGrid');
-  grid.innerHTML = `<button class="sp-btn inspect on" data-tool="-1" title="Inspect tool (0)"><span class="ico">⌕</span><div><span class="nm">INSPECT</span><small>Hover to inspect · click to track</small></div></button>` +
+  grid.innerHTML = `<button class="sp-btn inspect on" data-tool="-1" title="Inspect tool (0)"><span class="ico"><span class="sym" style="font-size:22px">⌕</span></span><div><span class="nm">INSPECT</span><small>Hover to inspect · click to track</small></div></button>` +
     SPECIES.map((s, i) => `<button class="sp-btn" data-tool="${i}" title="${s.name} (${i + 1})">
       <img src="${ICONS[i]}" alt="">
       <div><span class="nm" style="color:${s.color}">${s.name.toUpperCase()}</span><small>${s.role} · key ${i + 1}</small></div>
-      <div class="cnt"><b id="cnt-${i}">0</b><span id="sex-${i}">♂0 ♀0</span></div></button>`).join('');
+      <div class="cnt"><b id="cnt-${i}">0</b><span id="sex-${i}"></span></div></button>`).join('');
   grid.addEventListener('click', e => { const b = e.target.closest('.sp-btn'); if (b) setTool(+b.dataset.tool); });
 
   $('#legend').innerHTML = SPECIES.map((s, i) => `<button class="legend-item" data-s="${i}" title="Show/hide on chart"><i style="background:${s.color}"></i>${s.plural}<b id="lg-${i}">0</b></button>`).join('');
@@ -1652,7 +1655,7 @@ function updateSidebar() {
   for (let i = 0; i < 5; i++) {
     tot += c[i];
     $('#cnt-' + i).textContent = c[i];
-    $('#sex-' + i).textContent = `♂${world.males[i]} ♀${c[i] - world.males[i]}`;
+    $('#sex-' + i).innerHTML = `<span class="sym male">♂</span>${world.males[i]} <span class="sym female">♀</span>${c[i] - world.males[i]}`;
     $('#lg-' + i).textContent = c[i];
     const d = world.deaths[i];
     $('#live-' + i).innerHTML = `
@@ -1663,7 +1666,7 @@ function updateSidebar() {
   }
   const si = GOL.seasonInfo(world);
   $('#chipDate').innerHTML = `YEAR <b>${Math.floor(world.tick / YEAR) + 1}</b> · DAY <b>${(world.tick % YEAR) + 1}</b>`;
-  $('#chipSeason').textContent = (si.name === 'Dry season' || si.name === 'Drying out' ? '☀ ' : '☂ ') + si.name.toUpperCase();
+  $('#chipSeason').innerHTML = `<span class="sym">${si.name === 'Dry season' || si.name === 'Drying out' ? '☀' : '☂'}</span> ${si.name.toUpperCase()}`;
   $('#chipPop').innerHTML = `ANIMALS <b>${tot}</b>`;
   const H_ = GOL.shannon(c);
   $('#bioVal').textContent = H_.toFixed(2);
@@ -1751,7 +1754,7 @@ function setView(v) {
   $('#viewLegend').innerHTML = viewMode === 1 ? '<span class="male">■ male</span> · <span class="female">■ female</span>' :
     viewMode === 2 ? '<span class="legend-energy">starving <i></i> full</span>' : '';
 }
-function setSound(on) { Sfx.on = on; storage.set('sound', on); $('#btnSound').textContent = on ? '♪ ON' : '♪ OFF'; }
+function setSound(on) { Sfx.on = on; storage.set('sound', on); $('#btnSound').innerHTML = `<span class="sym" style="font-size:11px">♪</span> ${on ? 'ON' : 'OFF'}`; }
 
 $('#btnPlay').onclick = () => { Sfx.init(); setRunning(!running); };
 $('#btnStep').onclick = () => { setRunning(false); GOL.step(world); };
