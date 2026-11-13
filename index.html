@@ -79,6 +79,9 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 #zoomBar{position:absolute;top:8px;right:8px;z-index:4;display:flex;gap:4px}
 #zoomBar .btn{padding:6px 8px;min-width:30px}
 #zoomBar .btn:disabled{opacity:.4;cursor:default}
+#minimap{position:absolute;right:8px;bottom:8px;width:160px;height:100px;border:2px solid var(--edge);
+  box-shadow:0 0 0 1px var(--gold);image-rendering:pixelated;touch-action:none;z-index:4;display:none;cursor:pointer;background:#000}
+#minimap.show{display:block}
 #pausedTag{position:absolute;top:8px;left:8px;font-family:var(--px);font-size:9px;background:rgba(5,6,15,.8);
   padding:6px 8px;border:2px solid var(--gold);color:var(--gold);display:none;pointer-events:none}
 #pausedTag.show{display:block;animation:blink 1s steps(2) infinite}
@@ -239,6 +242,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
           <button class="btn" id="btnZoomIn" title="Zoom in (Z or mouse wheel)" aria-label="Zoom in">+</button>
           <button class="btn" id="btnZoomAll" title="Whole world (press again to go back)">ALL</button>
         </div>
+        <canvas id="minimap" width="160" height="100" aria-label="Minimap: click or drag to move the view"></canvas>
         <div id="pausedTag">PAUSED</div>
         <div id="tooltip"></div>
         <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div></div>
@@ -1950,6 +1954,7 @@ function updateZoomUI() {
   zt.innerHTML = `Zoom <b>${ZOOM_LABELS[cam.zi]}</b>`;
   $('#btnZoomIn').disabled = cam.zi >= CAM.ZOOMS.length - 1;
   $('#btnZoomOut').disabled = cam.zi <= 0;
+  updateMinimapVisibility();
 }
 // Mouse wheel / trackpad: add up the scroll distance and zoom one level per 50 px, toward the pointer.
 // Small trackpad deltas add up; the sum is dropped after 200 ms without wheel events.
@@ -2188,6 +2193,72 @@ function newWorld(preset, isDemo) {
   updateSidebar(); updateObjectives(); drawCharts();
 }
 
+// ---------------- minimap ----------------
+// The whole world at 2 x 2 tiles per minimap px. The base layer (terrain + animal dots) is rebuilt
+// every UI tick (250 ms); each frame adds the blinking tracked animal and the view rectangle.
+const MM_W = 160, MM_H = 100;
+const mmCanvas = $('#minimap'), mmCtx = mmCanvas.getContext('2d', { alpha: false });
+const mmImg = mmCtx.createImageData(MM_W, MM_H), mmBuf = new Uint32Array(mmImg.data.buffer);
+const mmBase = new Uint32Array(MM_W * MM_H);
+const MM_WATER = pack(hex('#2b66a6')), MM_TREE = pack(hex('#2f5e2a')), MM_ROCK = pack(hex('#878275'));
+const MM_GRASS = (() => {   // 16 steps from bare to full grass
+  const a = hex('#6b5236'), b = hex('#3c7a35');
+  return Array.from({ length: 16 }, (_, l) => pack(a.map((v, j) => Math.round(v + (b[j] - v) * l / 15))));
+})();
+const MM_SP = SPECIES.map(S => pack(hex(S.color)));
+let mmShown = false;
+function refreshMinimapBase() {
+  if (!world || !mmShown) return;
+  const ter = world.terrain, gr = world.grass;
+  for (let my = 0, o = 0; my < MM_H; my++) for (let mx = 0; mx < MM_W; mx++, o++) {
+    const i = (my * 2) * W + mx * 2, t = ter[i];
+    mmBase[o] = t === T_GRASS ? MM_GRASS[Math.max(0, Math.min(15, (gr[i] * 15 + 0.5) | 0))]
+      : t === T_WATER ? MM_WATER : t === T_TREE ? MM_TREE : MM_ROCK;
+  }
+  const A = world.animals;
+  for (let pass = 0; pass < 2; pass++) for (let k = 0; k < A.length; k++) {   // prey first, predators on top
+    const a = A[k];
+    if (a.alive && (a.sp >= 3) === (pass === 1)) mmBase[(a.y >> 1) * MM_W + (a.x >> 1)] = MM_SP[a.sp];
+  }
+}
+function drawMinimap() {
+  if (!mmShown) return;
+  mmBuf.set(mmBase);
+  if (selected && selected.alive && (frameNo >> 3) & 1) {
+    const x = Math.min(MM_W - 2, selected.x >> 1), y = Math.min(MM_H - 2, selected.y >> 1);
+    mmBuf[y * MM_W + x] = mmBuf[y * MM_W + x + 1] = mmBuf[(y + 1) * MM_W + x] = mmBuf[(y + 1) * MM_W + x + 1] = GOLD;
+  }
+  mmCtx.putImageData(mmImg, 0, 0);
+  const r = CAM.minimapViewRect(cam, MM_W, MM_H);
+  mmCtx.strokeStyle = '#fff'; mmCtx.lineWidth = 1;
+  mmCtx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.max(1, Math.round(r.w) - 1), Math.max(1, Math.round(r.h) - 1));
+}
+// Shown unless the whole world is already on the map, or the map is narrower than 600 px.
+function updateMinimapVisibility() {
+  const show = cam.zi !== 0 && $('#wrap').clientWidth >= 600;
+  if (show === mmShown) return;
+  mmShown = show;
+  mmCanvas.classList.toggle('show', show);
+  if (show) refreshMinimapBase();
+}
+// Click or drag on the minimap: centre the view there. It never acts on the world.
+let mmDragId = null;
+function minimapJump(e) {
+  const r = mmCanvas.getBoundingClientRect();
+  const t = CAM.minimapToTile(cam, (e.clientX - r.left) * MM_W / r.width, (e.clientY - r.top) * MM_H / r.height, MM_W, MM_H);
+  CAM.centerOn(cam, t.x, t.y);
+  follow = false;
+}
+mmCanvas.addEventListener('pointerdown', e => {
+  e.preventDefault(); e.stopPropagation();
+  mmDragId = e.pointerId;
+  try { mmCanvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers cannot be captured */ }
+  minimapJump(e);
+});
+mmCanvas.addEventListener('pointermove', e => { if (e.pointerId === mmDragId) { e.preventDefault(); e.stopPropagation(); minimapJump(e); } });
+for (const t of ['pointerup', 'pointercancel']) mmCanvas.addEventListener(t, e => { if (e.pointerId === mmDragId) { e.stopPropagation(); mmDragId = null; } });
+mmCanvas.addEventListener('contextmenu', e => e.preventDefault());
+
 // ---------------- camera per frame ----------------
 let lastCamKey = '';
 function updateCamera(dt, overlay) {
@@ -2232,9 +2303,11 @@ function frame(now) {
       render();
       window.golDebug.renderMs += (performance.now() - t0 - window.golDebug.renderMs) * 0.1;
     } else render();
+    drawMinimap();
     if (now - lastUi > 250) {
       lastUi = now;
       updateSidebar(); drawCharts();
+      updateMinimapVisibility(); refreshMinimapBase();
       if (!demo) { updateObjectives(); checkContextNotes(); }
       if (selected) { updateTracker(); if (!selected.alive && now - (selected._seenDead || (selected._seenDead = now)) > 6000) { selected = null; updateTracker(); } }
       updateTooltip();

@@ -298,6 +298,45 @@
       'new pair ' + JSON.stringify(fresh.map(a => [a.x, a.y])) + ' view ' + JSON.stringify(v));
   });
 
+  // ---------- group: minimap (Task 7) ----------
+  const mm = () => document.querySelector('#minimap');
+  const wrapEl = document.querySelector('#wrap');
+  // The minimap only shows on maps at least 600 px wide; on a narrower pane these checks can't run.
+  const wideEnough = () => wrapEl.clientWidth >= 600;
+  add('minimap', 'visible at 1x, hidden at whole world', async () => {
+    if (!wideEnough()) return 'skipped: pane too narrow';
+    check(mm() && mm().classList.contains('show'), 'minimap not shown at 1x');
+    key('x');
+    check(!mm().classList.contains('show'), 'minimap shown at whole world');
+  });
+  add('minimap', 'click jumps the camera', async () => {
+    if (!wideEnough()) return 'skipped: pane too narrow';
+    CAM.panBy(D.cam, -3000, -3000);
+    ptr('pointerdown', 80, 50, { target: mm() }); ptr('pointerup', 80, 50, { target: mm() });
+    const c = CAM.canvasToTile(D.cam, 480, 300);
+    check(c && Math.abs(c.x - 160) <= 1 && Math.abs(c.y - 100) <= 1, 'view centre tile ' + JSON.stringify(c));
+  });
+  add('minimap', 'minimap drag never releases animals', async () => {
+    if (!wideEnough()) return 'skipped: pane too narrow';
+    key('3');
+    const before = injected();
+    ptr('pointerdown', 40, 30, { target: mm() });
+    ptr('pointermove', 70, 50, { target: mm() });
+    ptr('pointerup', 70, 50, { target: mm() });
+    check(injected() === before, 'a minimap drag released a couple');
+    const c = CAM.canvasToTile(D.cam, 480, 300);
+    check(c && Math.abs(c.x - 140) <= 1 && Math.abs(c.y - 100) <= 1, 'drag did not move the view: ' + JSON.stringify(c));
+  });
+  add('minimap', 'hidden on narrow maps', async () => {
+    if (!wideEnough()) return 'skipped: pane too narrow';
+    wrapEl.style.maxWidth = '500px';
+    try {
+      await sleep(300); await frames(1);
+      check(!mm().classList.contains('show'), 'minimap shown on a 500 px map');
+    } finally { wrapEl.style.maxWidth = ''; }
+    await sleep(300);
+  });
+
   // ---------- runner ----------
   window.uiCheck = async group => {
     await setup();
