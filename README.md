@@ -45,16 +45,20 @@ Food chains and energy pyramids · Lotka–Volterra predator–prey cycles · r-
 
 ## Multicore (for older and school PCs)
 
-The game uses a **master thread with helper (slave) threads**. The master runs the simulation. Each day, the animals' decisions ("thinking", the most expensive read-only part) are shared out to helper Web Workers through shared memory, while the master regrows the grass. Then the master applies the decisions one animal at a time.
+The whole world lives in shared memory and every simulated day runs in parallel on all your CPU cores (up to 16 threads):
 
-- **Same results on any CPU:** every decision is a pure function of a snapshot of the day, so a world plays out identically on 1, 2, 4 or 8 threads, and Daily Savanna stays fair.
-- **Turned on automatically:** the game uses up to 7 helpers (one fewer than your CPU threads). You can switch it off under **Environment → Multicore**.
-- **Needs the online version:** shared memory requires "cross-origin isolation". GitHub Pages can't send the required headers, so the small service worker `coi-sw.js` adds them, which costs one automatic reload on the first visit. Opened straight from a file, the game runs on one thread, exactly as before.
-- **Safety net:** if a helper ever stops responding, the master finishes that day's decisions itself and stays single-threaded for the rest of the session.
+1. **Grass** regrows in 16 bands of rows at once.
+2. **Animals:** the map is cut into 8 vertical strips, 40 tiles wide. First every other strip runs at the same time, then the rest. Strips that run together are too far apart to touch the same tiles or animals, so moving, eating, hunting and breeding all run in parallel.
+
+- **Same results on any CPU:** each strip has its own random numbers, newborn slots and event list, merged in a fixed order, so a world plays out identically on 1, 2, 4 or 16 threads and Daily Savanna stays fair.
+- **Speed:** on a mature world the simulation runs about **+10% faster on 2 threads and about +50% on 4–16 threads** than the old single-threaded game (average +40% across 2–16 threads). See [docs/multicore-benchmark.md](docs/multicore-benchmark.md) for how this was measured and how it compares with the alternative "master + helper threads" design.
+- **Turned on automatically**, using one helper per extra CPU thread; switch it off under **Environment → Multicore**.
+- **Needs the online version:** shared memory requires "cross-origin isolation". GitHub Pages can't send the required headers, so the small service worker `coi-sw.js` adds them, which costs one automatic reload on the first visit. Opened straight from a file, the game runs on one thread with exactly the same results.
+- **Safety net:** if a helper ever stops responding, the game finishes on the page and stays single-threaded for the rest of the session.
 
 ## Developer tools
 
-The simulation core (`<script id="sim-core">`, which loads `<script id="think-core">` for decisions) has no DOM dependencies, so you can run it headlessly in Node:
+The simulation core (`<script id="sim-core">`) has no DOM dependencies (it also runs inside the helper workers), so you can run it headlessly in Node:
 
 ```bash
 node tools/balance.js 15 5 balanced   # years, seeds, preset: population report per half-year

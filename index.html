@@ -467,9 +467,9 @@ const GOL = (() => {
   // parallel layout
   const NS = 8, SW = W / NS, BANDS = 16;
   const CAP = 32768;            // animal slots: living animals + recently dead (kept for the UI)
-  const QUARANTINE = 120;       // days a dead animal's slot is kept before reuse
+  const QUARANTINE = 60;        // days a dead animal's slot is kept before reuse (sooner if room runs short)
   const FREE_PER_STRIP = 1024;  // newborn slots handed to each strip per day
-  const EV_CAP = 2048, EV_F = 8; // events per strip per day, fields per event
+  const EV_CAP = 4096, EV_F = 8; // events per strip per day, fields per event
   const STATN = 32;             // per-strip stats: births 0-4, kills 5-9, deaths 10-29 (sp*4+cause), fights 30
   const E_DEATH = 1, E_KILL = 2, E_GORE = 3, E_FIGHT = 4, E_MATE = 5, E_BIRTH = 6;
 
@@ -1188,7 +1188,7 @@ const GOL = (() => {
     for (let st = 0; st < NS; st++) { SSTART[st] = off; off += cnt8[st]; SLEN[st] = 0; }
     for (let k = 0; k < n; k++) { const s = live[k], st = (X[s] / SW) | 0; SLIST[SSTART[st] + SLEN[st]++] = s; }
     // 2. newborn slots: an equal share for every strip, within the world's animal limit
-    releaseQuarantine(w);
+    releaseQuarantine(w, MAX_ANIMALS - n);
     const room = Math.max(0, Math.min(w.freeList.length, MAX_ANIMALS - n));
     const share = Math.min(FREE_PER_STRIP, Math.floor(room / NS));
     for (let st = 0; st < NS; st++) {
@@ -1204,10 +1204,10 @@ const GOL = (() => {
     bindViews(w.v);
     endOfDay(w, si);
   }
-  function releaseQuarantine(w) {
+  function releaseQuarantine(w, need) {
     const q = w.quarantine;
     let k = 0;
-    while (k < q.length && q[k].day <= w.tick - QUARANTINE) { w.freeList.push(q[k].slot); k++; }
+    while (k < q.length && (q[k].day <= w.tick - QUARANTINE || w.freeList.length < need)) { w.freeList.push(q[k].slot); k++; }
     if (k) q.splice(0, k);
   }
   function endOfDay(w, si) {
@@ -1473,6 +1473,7 @@ onmessage = e => {
   const d = e.data;
   if (d.ctrl) ctrl = new Int32Array(d.ctrl);
   GOL.bindViews(GOL.viewsOf(d.buf));   // the world this helper works on
+  if (Atomics.load(ctrl, ${C_EPOCH}) !== d.epoch) return;   // already replaced by a newer world: read the next message
   let seen = Atomics.load(ctrl, ${C_GEN});
   Atomics.add(ctrl, ${C_READY}, 1);
   for (;;) {
@@ -1525,10 +1526,15 @@ onmessage = e => {
       Atomics.store(ctrl, C_NEXT, from); Atomics.store(ctrl, C_END, from + n); Atomics.store(ctrl, C_DONE, 0);
       Atomics.add(ctrl, C_GEN, 1); Atomics.notify(ctrl, C_GEN);
       for (;;) { const t = Atomics.add(ctrl, C_NEXT, 1); if (t >= from + n) break; GOL.runTask(t); }   // the page works too
+      // Wait for every helper to check in. A helper is never stopped halfway through a phase; one
+      // that takes far too long (10 s) turns multicore off after this phase.
       const t0 = performance.now();
+      let slow = false;
       while (Atomics.load(ctrl, C_DONE) < workers.length) {
-        if (performance.now() - t0 > 1000) { P.lastError = 'helper timed out'; P.fail(); break; }
+        if (!slow && performance.now() - t0 > 10000) { slow = true; P.lastError = 'helper too slow'; }
+        if (performance.now() - t0 > 60000) break;   // a helper is gone for good: give up waiting
       }
+      if (slow) P.fail();
       P.stats.parallel++;
       return true;
     },
@@ -1552,10 +1558,10 @@ if (Pool.available) { GOL.setAllocator(bytes => new SharedArrayBuffer(bytes)); G
 let famNames = new Map(), famIds = new Map();   // family names (UI only) <-> numbers stored in the world
 function famIdOf(name) { if (!famIds.has(name)) { const id = famIds.size + 1; famIds.set(name, id); famNames.set(id, name); } return famIds.get(name); }
 class AnimalRef {
-  constructor(w, slot) { this.w = w; this.slot = slot; this.id = w.v.id[slot]; }
+  constructor(w, slot) { this.w = w; this.slot = slot; this.id = w.v.id[slot]; this._sp = w.v.sp[slot]; this._male = !!w.v.male[slot]; }
   get valid() { return this.w === world && this.w.v.id[this.slot] === this.id; }
   get alive() { return this.valid && !!this.w.v.alive[this.slot]; }
-  get sp() { return this.w.v.sp[this.slot]; } get male() { return !!this.w.v.male[this.slot]; }
+  get sp() { return this._sp; } get male() { return this._male; }   // fixed for life (safe after the slot is reused)
   get x() { return this.w.v.x[this.slot]; } get y() { return this.w.v.y[this.slot]; }
   get age() { return this.w.v.age[this.slot]; } get energy() { return this.w.v.energy[this.slot]; }
   get preg() { return this.w.v.preg[this.slot]; } get atk() { return this.w.v.atk[this.slot]; }
