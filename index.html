@@ -50,6 +50,7 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .btn.on{background:#3d2f8a}
 .btn.gold{background:#7a5a00;box-shadow: inset 2px 2px 0 #d1a51c, inset -2px -2px 0 #3d2c00}
 .btn.gold:hover{background:#8f6a00}
+#world:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .btn:focus-visible,.sp-btn:focus-visible,.legend-item:focus-visible,.tab:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 
 /* ---------- top bar ---------- */
@@ -67,7 +68,7 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
 .stage{padding:8px}
 .canvas-wrap{position:relative;margin:0 auto;max-width:calc((100vh - 150px) * 1.6);background:#000;border:2px solid var(--edge)}
-#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:none}
+#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:manipulation}
 .statusbar{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:18px}
 .statusbar b{color:var(--text);font-weight:normal}
 .legend-energy{display:inline-flex;align-items:center;gap:6px}
@@ -86,7 +87,7 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .bar{display:inline-block;width:80px;height:8px;background:#000;border:1px solid #333a70;vertical-align:middle;margin-right:4px}
 .bar i{display:block;height:100%}
 .male{color:var(--blue)} .female{color:var(--pink)}
-#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-family:var(--px);font-size:9px;line-height:1.5;
+#toast{pointer-events:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);font-family:var(--px);font-size:9px;line-height:1.5;
   background:rgba(10,12,30,.95);border:2px solid var(--gold);padding:8px 12px;color:#fff;display:none;z-index:6;text-align:center;max-width:90%}
 #toast.show{display:block;animation:pop .25s steps(3)}
 @keyframes pop{from{transform:translate(-50%,-8px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
@@ -167,7 +168,8 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 .formula{font-family:var(--px);font-size:8px;background:#000;padding:8px;border:2px solid var(--edge);color:var(--gold);line-height:1.8;margin:6px 0}
 
 /* ---------- overlays ---------- */
-.overlay{position:fixed;inset:0;background:rgba(5,6,16,.86);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;overflow:auto}
+.overlay > .dialog{margin:auto}
+.overlay{position:fixed;inset:0;background:rgba(5,6,16,.86);backdrop-filter:blur(3px);display:none;align-items:flex-start;justify-content:center;z-index:50;padding:16px;overflow:auto}
 .overlay.show{display:flex}
 .dialog{max-width:720px;width:100%;text-align:center}
 .big-title{font-family:var(--px);font-size:clamp(20px,5vw,40px);line-height:1.25;margin:10px 0 6px;color:#fff;
@@ -187,7 +189,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 @media (max-width:1050px){
   .layout{grid-template-columns:1fr}
   .side{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
-  .canvas-wrap{max-width:none}
+  .canvas-wrap{max-width:calc((100svh - 40px) * 1.6)}
 }
 @media (max-width:560px){
   #app{padding:8px 10px 20px}
@@ -205,7 +207,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 <div id="app">
   <header class="topbar">
     <h1 class="logo">THE GAME OF LIFE<small>PREDATOR · PREY · BALANCE</small></h1>
-    <div class="chips" aria-live="polite">
+    <div class="chips">
       <span class="chip" id="chipDate">YEAR <b>1</b> · DAY <b>1</b></span>
       <span class="chip" id="chipSeason">☂ WET SEASON</span>
       <span class="chip" id="chipPop">ANIMALS <b>0</b></span>
@@ -224,7 +226,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
   <main class="layout">
     <section class="panel stage">
       <div class="canvas-wrap" id="wrap">
-        <canvas id="world" width="960" height="600" aria-label="Savanna world map. Click to inject a couple or inspect animals."></canvas>
+        <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals."></canvas>
         <div id="pausedTag">PAUSED</div>
         <div id="tooltip"></div>
         <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div></div>
@@ -259,8 +261,8 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       </div>
       <div class="panel">
         <h2>ENVIRONMENT</h2>
-        <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100"></div>
-        <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked></div>
+        <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100" autocomplete="off"></div>
+        <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked autocomplete="off"></div>
         <div class="row"><label>Average grass</label><span class="bar" style="width:150px"><i id="grassBar" style="width:50%;background:#6cbf4a"></i></span></div>
       </div>
     </aside>
@@ -268,31 +270,32 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 
   <section class="panel">
     <div class="tabs-bar" role="tablist">
-      <button class="tab on" data-tab="guide" role="tab">SPECIES GUIDE</button>
-      <button class="tab" data-tab="journal" role="tab">FIELD JOURNAL<span class="badge" id="jBadge" style="display:none">0</span></button>
-      <button class="tab" data-tab="objectives" role="tab">OBJECTIVES <span id="objCount" style="color:var(--gold)">0/8</span></button>
-      <button class="tab" data-tab="eco" role="tab">ECOLOGY 101</button>
+      <button class="tab on" data-tab="guide" role="tab" aria-selected="true" aria-controls="tab-guide">SPECIES GUIDE</button>
+      <button class="tab" data-tab="journal" role="tab" aria-selected="false" aria-controls="tab-journal">FIELD JOURNAL<span class="badge" id="jBadge" style="display:none">0</span></button>
+      <button class="tab" data-tab="objectives" role="tab" aria-selected="false" aria-controls="tab-objectives">OBJECTIVES <span id="objCount" style="color:var(--gold)">0/8</span></button>
+      <button class="tab" data-tab="eco" role="tab" aria-selected="false" aria-controls="tab-eco">ECOLOGY 101</button>
     </div>
-    <div class="tabpane on" id="tab-guide"><div class="guide" id="guide"></div></div>
-    <div class="tabpane" id="tab-journal"><ul id="journal"></ul></div>
-    <div class="tabpane" id="tab-objectives"><div id="objectives"></div></div>
-    <div class="tabpane" id="tab-eco">
+    <div class="tabpane on" id="tab-guide" role="tabpanel"><div class="guide" id="guide"></div></div>
+    <div class="tabpane" id="tab-journal" role="tabpanel"><ul id="journal"></ul></div>
+    <div class="tabpane" id="tab-objectives" role="tabpanel"><div id="objectives"></div></div>
+    <div class="tabpane" id="tab-eco" role="tabpanel">
       <div class="eco">
         <section><h3>1 · FOOD CHAINS &amp; THE ENERGY PYRAMID</h3>
           <p>Grass captures sunlight (a <b>producer</b>). Buffalo, gazelles and hares eat grass (<b>primary consumers</b>). Lions and cheetahs eat them (<b>secondary consumers</b>).</p>
-          <p>At every step most energy is used up just staying alive, so only a fraction moves up the chain. That is why the savanna always holds far more prey than predators — check the two charts.</p></section>
+          <p>At every step most energy is used up just staying alive, so only a fraction moves up the chain. That is why the savanna always holds far more prey than predators. Compare the totals in the chart legend (each chart has its own scale).</p></section>
         <section><h3>2 · PREDATOR–PREY CYCLES</h3>
           <p>When prey are plentiful, predators eat well and raise more young. More predators eat more prey, so prey decline. Then predators go hungry and decline too, letting prey recover. The predator curve <b>lags behind</b> the prey curve.</p>
           <div class="formula">dPrey/dt = αPrey − βPrey·Pred<br>dPred/dt = δPrey·Pred − γPred</div>
+          <p>d/dt means "change over time". α = prey birth rate, β = how often predators catch prey, δ = how much eaten prey becomes new predators, γ = predator death rate.</p>
           <p>These are the classic <b>Lotka–Volterra equations</b> (1920s). This game doesn't use them directly: the cycles emerge from individual animals.</p></section>
         <section><h3>3 · r- AND K-STRATEGIES</h3>
-          <ul><li><b>r-strategists</b> (hares) mature early and have many young. They boom fast and crash fast.</li>
+          <ul><li><b>r-strategists</b> (hares) mature early and breed again and again in quick succession. They boom fast and crash fast.</li>
           <li><b>K-strategists</b> (buffalo, lions) have few young and invest in each. They change slowly and recover slowly from losses.</li></ul></section>
         <section><h3>4 · CARRYING CAPACITY</h3>
           <p>An area's <b>carrying capacity</b> is the largest population its resources can support. Here, grass sets the limit for grazers. In the dry season grass grows slowly and the capacity drops. Try lowering the rainfall slider to simulate a drought.</p></section>
         <section><h3>5 · COMPETITION &amp; NICHES</h3>
           <p>Lions and cheetahs compete for the same prey. Real lions kill cheetahs and their cubs without eating them. Ecologists call this <b>intraguild predation</b>.</p>
-          <p>Cheetahs survive by <b>niche partitioning</b>: they are fast but weak, so they avoid buffalo and hunt hares and gazelles instead, and they steer clear of lions.</p></section>
+          <p>Cheetahs coexist through <b>niche partitioning</b>: they are fast but light, so a healthy adult buffalo is a poor bet for them. They mostly hunt hares, gazelles and buffalo calves or weakened buffalo, and they steer clear of lions.</p></section>
         <section><h3>6 · SEXUAL REPRODUCTION &amp; SMALL POPULATIONS</h3>
           <p>Every birth here needs a male and a female who find each other. A very small or scattered population may fail to breed. This is the <b>Allee effect</b>. A single unlucky event can also wipe it out. That's why real reintroductions, like wolves to Yellowstone in 1995, release several animals.</p></section>
         <section><h3>7 · TROPHIC CASCADES</h3>
@@ -345,6 +348,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
     <div class="help-grid">
       <kbd>1–5</kbd><span>Select an animal to inject (Buffalo, Gazelle, Hare, Lion, Cheetah)</span>
       <kbd>CLICK</kbd><span>Release a ♂+♀ couple (with Shift: 3 couples)</span>
+      <kbd>ARROWS + ENTER</kbd><span>Keyboard play: Tab to the map, move the cursor with the arrows, press Enter to act</span>
       <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
       <kbd>SPACE</kbd><span>Pause / resume</span>
       <kbd>.</kbd><span>Step one day while paused</span>
@@ -353,7 +357,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>N</kbd><span>New world</span>
       <kbd>M</kbd><span>Sound on / off</span>
     </div>
-    <p class="hint" style="text-align:left">Prey are cool colours (blue buffalo, teal gazelles, white hares). Predators are warm colours (gold lions, red cheetahs). Babies are drawn smaller. Grass changes from green to straw to bare earth as it is eaten and as the seasons change.</p>
+    <p class="hint" style="text-align:left">Prey are cool colours (blue buffalo, teal gazelles, white hares). Predators are warm colours (gold lions, red cheetahs). Babies are drawn smaller. Grass changes from green to straw to bare earth as it is eaten and as the seasons change. Time runs fast here: one game year is 360 days, but lifespans and pregnancies are shortened and not to real scale.</p>
     <button class="btn gold" id="btnCloseHelp" style="margin-top:10px">GOT IT</button>
   </div>
 </div>
@@ -657,6 +661,7 @@ const GOL = (() => {
   function die(w, a, cause, by) {
     if (!a.alive) return;
     a.alive = false; a.cause = cause; a.by = by === undefined ? -1 : by; a.deathTick = w.tick;
+    a.mom = null; a.tgt = null; // let dead ancestors be garbage-collected
     const i = a.y * W + a.x;
     if (w.occ[i] === a) w.occ[i] = null;
     w.deaths[a.sp][cause]++;
@@ -1189,17 +1194,20 @@ const ICONS_F = SPECIES.map((s, i) => spriteURL(i, 0, 4));
 const Sfx = {
   ctx: null, on: storage.get('sound', true), last: {},
   init() {
-    if (this.ctx) return;
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}); return; }
     try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ctx = null; }
   },
   tone(freq, dur, type, vol, slide, delay) {
-    if (!this.on || !this.ctx) return;
+    if (!this.on || !this.ctx || this.ctx.state !== 'running') return;
+    try { this._tone(freq, dur, type, vol, slide, delay); } catch (e) { /* audio must never break the game */ }
+  },
+  _tone(freq, dur, type, vol, slide, delay) {
     const t0 = this.ctx.currentTime + (delay || 0);
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
     o.type = type || 'square'; o.frequency.setValueAtTime(freq, t0);
     if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), t0 + dur);
     g.gain.setValueAtTime(vol || 0.035, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g).connect(this.ctx.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+    o.connect(g); g.connect(this.ctx.destination); o.start(t0); o.stop(t0 + dur + 0.02);
   },
   play(name) {
     if (!this.on || !this.ctx) return;
@@ -1412,7 +1420,9 @@ function log(text, kind) {
 }
 const toastQ = [];
 let toastBusy = false;
+let toastTimer = 0;
 function toast(text) {
+  if (toastQ[toastQ.length - 1] === text || (toastBusy && $('#toast').textContent === text) || toastQ.length >= 4) return;
   toastQ.push(text);
   if (!toastBusy) nextToast();
 }
@@ -1422,23 +1432,23 @@ function nextToast() {
   toastBusy = true;
   el.textContent = toastQ.shift();
   el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
-  setTimeout(nextToast, 2600);
+  toastTimer = setTimeout(nextToast, 2600);
 }
 
 const NOTES = {
   welcome: 'Welcome, ranger! Every pixel here is one animal deciding for itself what to do: eat, flee, hunt or find a mate. Nothing is scripted. Every rise and fall in the charts comes from those choices.',
   inject: '<b>Founder population.</b> You just released one breeding pair. Real reintroductions release several animals, because a very small population can disappear through bad luck alone.',
   kill: '<b>Energy transfer.</b> A predator gets only part of the energy its prey gathered, and the rest was already spent living. That is why predators are always far fewer than prey: the energy pyramid.',
-  fight: '<b>Intraguild predation.</b> Lions really do kill cheetahs and their cubs. They don\'t eat them; they are removing a rival that hunts the same prey.',
+  fight: '<b>Intraguild predation.</b> Lions really do kill cheetahs and their cubs. They don\'t eat them; they are removing a rival that hunts the same prey. In this game a fight is a dice roll weighted by strength, so the underdog sometimes wins; in the wild, cheetahs almost always lose to lions.',
   gore: '<b>Herd defence.</b> Buffalo fight back. Attacking a buffalo that has other buffalo beside it is especially dangerous for a predator.',
   dry: '<b>Dry season.</b> Grass now grows slowly, so the land can feed fewer grazers. Its carrying capacity has dropped.',
   wet: '<b>The rains return.</b> Grass is the ecosystem\'s primary producer, and its growth surges now. Grazers will soon breed faster.',
-  hareBoom: '<b>r-selection.</b> Hares mature quickly and have big litters, so their numbers can explode in good times and crash just as fast.',
+  hareBoom: '<b>r-selection.</b> Hares mature early and breed again and again in quick succession, so their numbers can explode in good times and crash just as fast.',
   lag: '<b>Predator–prey lag.</b> Prey are falling while predators are still rising. Predators react to food supply with a delay, which is the core of the Lotka–Volterra cycle. Compare the two charts.',
   extinct: '<b>Extinction.</b> In nature it is permanent. Here you can use the Inject tool to release a couple and see if they re-establish.',
   noPred: '<b>No predators left.</b> Without them, grazers multiply until the grass runs out. This kind of chain reaction is called a trophic cascade, and it can end in mass starvation.',
   overgraze: '<b>Overgrazing.</b> Grass is nearly gone across the savanna, and bare ground regrows slowly. Starvation will push grazer numbers back below carrying capacity.',
-  cubs: '<b>Parental care.</b> Lion and cheetah cubs follow their mother and share her kills. If she dies, young cubs rarely survive. This is part of why big predators breed so slowly.',
+  cubs: '<b>Parental care.</b> Lion and cheetah cubs follow their mother and share her kills. In this game other adults nearby also share, so orphans sometimes pull through; in the wild, orphaned cheetah cubs rarely survive. Long dependence on parents is part of why big predators breed slowly.',
 };
 function note(id) {
   if (notesShown.has(id)) return;
@@ -1459,7 +1469,7 @@ const OBJECTIVES = [
 ];
 const sumArr = a => a.reduce((s, v) => s + v, 0);
 function coexistDays() { return goalTrack.coexistStart === undefined ? 0 : world.tick - goalTrack.coexistStart; }
-const rescueLive = r => r && world.counts[r.sp] > 0 && world.extinctAt[r.sp] < r.start;
+const rescueLive = r => r && world.counts[r.sp] > 0 && world.extinctAt[r.sp] <= r.start;
 function rescueOK() { return (goalTrack.rescue || []).some(r => rescueLive(r) && world.tick - r.start >= YEAR); }
 function rescueProg() {
   const live = (goalTrack.rescue || []).filter(rescueLive);
@@ -1497,6 +1507,7 @@ function processEvents() {
   const ev = world.events;
   if (!ev.length) return;
   const heavy = SPEEDS[speedIdx] >= 8;
+  let fightN = world.fights - ev.reduce((n, x) => n + (x.t === 'fight' ? 1 : 0), 0);
   for (const e of ev) {
     const S = e.sp !== undefined ? SPECIES[e.sp] : null;
     switch (e.t) {
@@ -1511,7 +1522,8 @@ function processEvents() {
       case 'death': if (!heavy && Math.random() < 0.5) spawn('soul', e.x, e.y); break;
       case 'fight':
         spawn('star', e.x, e.y); Sfx.play('fight'); note('fight');
-        if (world.fights <= 3 || e.killed && world.fights % 5 === 0)
+        fightN++;
+        if (fightN <= 3 || e.killed && fightN % 5 === 0)
           log(`⚔ A ${SPECIES[e.win].name.toLowerCase()} fought a ${SPECIES[e.lose].name.toLowerCase()}. The ${SPECIES[e.lose].name.toLowerCase()} ${e.killed ? 'was killed' : 'fled, wounded'}.`, 'bad');
         break;
       case 'inject':
@@ -1600,11 +1612,11 @@ const STATS = [
   { Reproduction: 2, Strength: 3, Speed: 5, Appetite: 3 },
 ];
 const DESC = [
-  'Big, slow grazers. They breed slowly, one calf after a long pregnancy, but they are tough. They survive many attacks, and a herd fights back by goring attackers. One buffalo feeds a predator for a long time.',
+  'Big, slow grazers. They breed slowly, one calf with a long wait between calves, but they are tough. They survive many attacks, and a herd fights back by goring attackers. One buffalo feeds a predator for a long time.',
   'Fast and watchful. They notice danger from far away and run, so they are moderately hard to catch. They breed at a medium pace, with 1–2 fawns.',
-  'Small and easy to catch, but they breed very fast: early maturity, a short pregnancy and 2–4 young. Many are eaten and quickly replaced.',
+  'Small and easy to catch, but they breed very fast: early maturity, a short pregnancy, 1–3 young per litter and a new litter about every two months. Many are eaten and quickly replaced.',
   'The strongest hunter, with moderate speed and slow breeding. Lions can bring down buffalo. Cubs follow their mother and share her kills. Lions also attack cheetahs, their main rivals.',
-  'The fastest animal here, moving two cells every turn, but only moderately strong. Buffalo are too dangerous for them, so they hunt gazelles and hares instead. They avoid lions, and will attack lion cubs left on their own.',
+  'The fastest animal here, moving two cells every turn, but only moderately strong. Healthy adult buffalo are a risky meal for them, so they mostly hunt gazelles, hares, and buffalo calves or weakened buffalo. They avoid lions, and in this game will attack lion cubs left on their own.',
 ];
 function buildSidebar() {
   const grid = $('#spGrid');
@@ -1620,7 +1632,7 @@ function buildSidebar() {
     const b = e.target.closest('.legend-item'); if (!b) return;
     const s = +b.dataset.s;
     if (hiddenSeries.has(s)) hiddenSeries.delete(s); else hiddenSeries.add(s);
-    b.classList.toggle('off', hiddenSeries.has(s));
+    b.classList.toggle('off', hiddenSeries.has(s)); b.setAttribute('aria-pressed', !hiddenSeries.has(s));
     drawCharts();
   });
 
@@ -1716,11 +1728,12 @@ function updateTracker() {
   el.style.display = 'block';
 }
 $('#tracker .x').addEventListener('pointerdown', e => { e.preventDefault(); selected = null; updateTracker(); });
+$('#tracker .x').addEventListener('click', () => { selected = null; updateTracker(); canvas.focus(); });
 
 // ---------------- controls ----------------
 function setTool(t) {
   tool = t;
-  document.querySelectorAll('.sp-btn').forEach(b => b.classList.toggle('on', +b.dataset.tool === t));
+  document.querySelectorAll('.sp-btn').forEach(b => { b.classList.toggle('on', +b.dataset.tool === t); b.setAttribute('aria-pressed', +b.dataset.tool === t); });
   $('#toolText').innerHTML = t < 0 ? 'Tool: <b>Inspect</b> — hover an animal, click to track it' :
     `Tool: <b style="color:${SPECIES[t].color}">Release ${SPECIES[t].name} couple</b> — click the land`;
   Sfx.play('select');
@@ -1754,7 +1767,7 @@ $('#btnRange').onclick = () => { chartRange = chartRange === 180 ? 900 : 180; $(
 $('#rain').oninput = e => { world.rain = e.target.value / 100; $('#rainVal').textContent = e.target.value + '%'; };
 $('#seasons').onchange = e => { world.seasons = e.target.checked; };
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  document.querySelectorAll('.tab').forEach(x => { x.classList.toggle('on', x === t); x.setAttribute('aria-selected', x === t); });
   document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('on', p.id === 'tab-' + t.dataset.tab));
   if (t.dataset.tab === 'journal') { journalUnread = 0; $('#jBadge').style.display = 'none'; }
 });
@@ -1770,11 +1783,14 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
 canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
-  Sfx.init();
   const c = cellFrom(e); if (!c) return;
+  actAt(c, e.shiftKey);
+});
+function actAt(c, shift) {
+  Sfx.init();
   hover = c;
   if (tool >= 0) {
-    const pairs = e.shiftKey ? 3 : 1;
+    const pairs = shift ? 3 : 1;
     let ok = 0;
     for (let k = 0; k < pairs; k++) {
       const ox = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8), oy = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8);
@@ -1784,7 +1800,7 @@ canvas.addEventListener('pointerdown', e => {
     if (ok) {
       if (world.extinctAt[tool] >= 0) {
         goalTrack.rescue = goalTrack.rescue || [];
-        if (!goalTrack.rescue.some(r => r && r.sp === tool && world.counts[tool] > 0 && r.start > world.extinctAt[tool]))
+        if (!goalTrack.rescue.some(r => r && r.sp === tool && world.counts[tool] > 0 && r.start >= world.extinctAt[tool]))
           goalTrack.rescue.push({ sp: tool, start: world.tick });
       }
       log(`✚ You released ${ok > 1 ? ok + ' couples' : 'a couple'} of <b style="color:${S.color}">${S.plural.toLowerCase()}</b> (♂+♀).`, 'good');
@@ -1797,15 +1813,30 @@ canvas.addEventListener('pointerdown', e => {
     selected = a || null;
     updateTracker(); updateTooltip();
   }
+}
+// Keyboard play: focus the map, move the cursor with the arrow keys (Shift = 5 cells), Enter to act.
+canvas.addEventListener('keydown', e => {
+  const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!d && e.key !== 'Enter') return;
+  e.preventDefault(); e.stopPropagation();
+  if (!hover) hover = { x: W >> 1, y: H >> 1 };
+  if (d) {
+    const n = e.shiftKey ? 5 : 1;
+    hover = { x: Math.max(0, Math.min(W - 1, hover.x + d[0] * n)), y: Math.max(0, Math.min(H - 1, hover.y + d[1] * n)) };
+  } else actAt(hover, e.shiftKey);
 });
+canvas.addEventListener('focus', () => { if (!hover) hover = { x: W >> 1, y: H >> 1 }; });
+canvas.addEventListener('blur', () => { if (!lastMouse) hover = null; });
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (e.target === canvas && /^Arrow|^Enter$/.test(e.key)) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const titleOpen = $('#titleScreen').classList.contains('show'), helpOpen = $('#helpScreen').classList.contains('show');
   if (helpOpen) { if (e.key === 'Escape' || e.key === 'h' || e.key === 'H') { closeHelp(); e.preventDefault(); } return; }
   if (titleOpen) { if (e.key === 'Escape' && world && titleCanClose) { closeTitle(); e.preventDefault(); } return; }
   const k = e.key;
+  if (k === ' ' && e.target !== document.body && e.target !== canvas && e.target.matches(':focus-visible')) return; // let Space press focused controls
   if (k === ' ') { e.preventDefault(); Sfx.init(); setRunning(!running); }
   else if (k >= '1' && k <= '5') setTool(+k - 1);
   else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; updateTracker(); } }
@@ -1877,7 +1908,8 @@ function newWorld(preset, isDemo) {
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
-  toastQ.length = 0;
+  toastQ.length = 0; clearTimeout(toastTimer); toastBusy = false; $('#toast').classList.remove('show');
+  $('#rainVal').textContent = $('#rain').value + '%';
   $('#journal').innerHTML = ''; journalUnread = 0; $('#jBadge').style.display = 'none';
   $('#seedText').textContent = seed;
   updateTracker();
@@ -1892,10 +1924,14 @@ function newWorld(preset, isDemo) {
 // ---------------- main loop ----------------
 let last = performance.now(), tickAcc = 0, lastUi = 0;
 function loop(now) {
+  try { frame(now); } catch (err) { console.error(err); } finally { requestAnimationFrame(loop); }
+}
+function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   const titleOpen = $('#titleScreen').classList.contains('show');
   if (titleOpen) drawParade(dt);
-  const go = running || (titleOpen && demo);
+  const helpOpen = $('#helpScreen').classList.contains('show');
+  const go = !helpOpen && (running || (titleOpen && demo));
   if (world && go) {
     tickAcc += dt * BASE_TPS * (titleOpen ? 1 : SPEEDS[speedIdx]);
     const t0 = performance.now();
@@ -1916,7 +1952,6 @@ function loop(now) {
       updateTooltip();
     }
   }
-  requestAnimationFrame(loop);
 }
 
 buildSidebar();
