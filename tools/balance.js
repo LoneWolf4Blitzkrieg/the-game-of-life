@@ -2,7 +2,8 @@
 // Usage: node tools/balance.js [years=12] [seeds=5] [preset=balanced]
 const fs = require('fs'), path = require('path');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const src = html.match(/<script id="sim-core">([\s\S]*?)<\/script>/)[1];
+// think-core (decisions) must load before sim-core, which uses its THINK global
+const src = ['think-core', 'sim-core'].map(id => html.match(new RegExp(`<script id="${id}">([\\s\\S]*?)<\\/script>`))[1]).join('\n');
 const GOL = new Function('module', src + '\nreturn GOL;')(undefined);
 const years = +(process.argv[2] || 12), seeds = +(process.argv[3] || 5), preset = process.argv[4] || 'balanced';
 const names = GOL.SPECIES.map(s => s.key.slice(0, 4));

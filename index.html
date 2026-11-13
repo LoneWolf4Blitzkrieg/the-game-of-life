@@ -7,7 +7,20 @@
 <meta name="description" content="An educational 16-bit predator–prey ecosystem simulation.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script>
+// Multicore play needs SharedArrayBuffer, which needs "cross-origin isolation". GitHub Pages can't
+// send the headers for that, so coi-sw.js (a tiny service worker) adds them. Register it and
+// reload once; if that isn't possible (opened from disk, old browser), the game runs on one thread.
+(() => {
+  if (window.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
+  let tried = false;
+  try { tried = sessionStorage.getItem('gol.coi') === '1'; sessionStorage.setItem('gol.coi', '1'); } catch (e) { tried = true; }
+  navigator.serviceWorker.register('coi-sw.js').then(() => navigator.serviceWorker.ready).then(() => {
+    if (!tried) location.reload();
+  }).catch(() => { /* single-threaded */ });
+})();
+</script>
 <style>
 :root{
   --bg:#0b0d1c; --bg2:#121530; --panel:#171b38; --panel2:#1e2347; --edge:#05060f;
@@ -303,6 +316,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100" autocomplete="off"></div>
         <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked autocomplete="off"></div>
         <div class="row"><label for="autoPredict">Prediction prompts</label><input type="checkbox" id="autoPredict" checked autocomplete="off"></div>
+        <div class="row" title="Shares the animals' thinking across your computer's CPU cores"><label for="multicore">Multicore <span id="cpuText" style="color:var(--teal)"></span></label><input type="checkbox" id="multicore" checked autocomplete="off"></div>
         <div class="row"><label>Average grass</label><span class="bar" style="width:150px"><i id="grassBar" style="width:50%;background:#6cbf4a"></i></span></div>
       </div>
     </aside>
@@ -412,6 +426,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>DRAG / W A S D</kbd><span>Move around the map (Shift = faster)</span>
       <kbd>F</kbd><span>Follow the animal you are tracking</span>
       <kbd>P</kbd><span>Predict: guess whether a species will rise or fall over the next year</span>
+      <kbd>MULTICORE</kbd><span>Under Environment: shares the animals' thinking across your CPU cores (online version)</span>
       <kbd>NAME</kbd><span>Name a couple when you release it, or press NAME on a tracked animal. Babies keep the family name.</span>
       <kbd>MINIMAP</kbd><span>Click or drag the small map in the corner to jump there</span>
       <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
@@ -428,6 +443,219 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 </div>
 
 <!-- ===================== SIMULATION CORE (no DOM) ===================== -->
+<script id="think-core">
+// ===================== THINK CORE (no DOM, no objects) =====================
+// How animals decide what to do ("think"), computed from a snapshot of the world held in
+// typed arrays. The master thread fills the snapshot at the start of each day; slave Web
+// Workers and the master then share out the animals that are due to think. Every decision
+// is a pure function of the snapshot (the one dice roll is a hash of seed, day and animal),
+// so the result is identical whether 1 thread or 16 do the work.
+const THINK = (() => {
+  'use strict';
+  const MODES = ['graze', 'flee', 'mate', 'hunt', 'search', 'rest', 'follow', 'attack', 'wander'];
+  const M = {}; MODES.forEach((m, i) => { M[m] = i; });
+  const PREY_MASK = 0b00111, PRED_MASK = 0b11000;
+  // control block (Int32Array on a SharedArrayBuffer) used to share out work between threads
+  const C_GEN = 0, C_NEXT = 1, C_COUNT = 2, C_DONE = 3, C_STOP = 4, C_SIZE = 8, BLOCK = 16;
+
+  let SP, W, H, CH, CW, CN;
+  let occ, cover, chunks, x, y, sp, male, age, energy, preg, cd, atk, alert, life, mom, id, outMode, outTgt, doneGen, due, meta;
+
+  function setup(cfg) { SP = cfg.species; W = cfg.W; H = cfg.H; CH = cfg.CH; CW = W / CH; CN = CW * (H / CH); }
+  // Lay out every snapshot array on one buffer (ArrayBuffer or SharedArrayBuffer).
+  function layout(cap, n) {
+    const f = [['occ', Int32Array, n], ['cover', Uint8Array, n], ['chunks', Int32Array, 5 * CN],
+      ['x', Int16Array, cap], ['y', Int16Array, cap], ['sp', Int8Array, cap], ['male', Uint8Array, cap],
+      ['age', Int32Array, cap], ['energy', Float32Array, cap], ['preg', Int32Array, cap], ['cd', Int32Array, cap],
+      ['atk', Int32Array, cap], ['alert', Int32Array, cap], ['life', Float32Array, cap], ['mom', Int32Array, cap],
+      ['id', Int32Array, cap], ['outMode', Uint8Array, cap], ['outTgt', Int32Array, cap], ['doneGen', Int32Array, cap],
+      ['due', Int32Array, cap], ['meta', Int32Array, 4]];
+    let off = 0;
+    const plan = f.map(([name, T, len]) => { off = Math.ceil(off / 8) * 8; const p = { name, T, len, off }; off += len * T.BYTES_PER_ELEMENT; return p; });
+    return { plan, bytes: Math.ceil(off / 8) * 8 };
+  }
+  function views(buf, cap, n) {
+    const v = {};
+    for (const p of layout(cap, n).plan) v[p.name] = new p.T(buf, p.off, p.len);
+    return v;
+  }
+  function bind(v) {
+    ({ occ, cover, chunks, x, y, sp, male, age, energy, preg, cd, atk, alert, life, mom, id, outMode, outTgt, doneGen, due, meta } = v);
+  }
+
+  // meta: [day, seed, generation, unused]
+  function hrand(a, b, c) {
+    let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b + 0x632be5ab) | 0, 0xc2b2ae35) ^ Math.imul((c + 0x27d4eb2f) | 0, 0x165667b1);
+    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
+    return (h >>> 0) / 4294967296;
+  }
+  const cheb = (i, j) => Math.max(Math.abs(x[i] - x[j]), Math.abs(y[i] - y[j]));
+
+  function anyInBox(x0, y0, x1, y1, mask) {
+    x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W - 1, x1); y1 = Math.min(H - 1, y1);
+    const cx0 = (x0 / CH) | 0, cx1 = (x1 / CH) | 0, cy0 = (y0 / CH) | 0, cy1 = (y1 / CH) | 0;
+    for (let s = 0; s < 5; s++) {
+      if (!((mask >> s) & 1)) continue;
+      const base = s * CN;
+      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (chunks[base + cy * CW + cx]) return true;
+    }
+    return false;
+  }
+
+  // What counts as a match when searching outward for the nearest animal.
+  const Q_GROWN = 0, Q_MATE = 1, Q_ANY = 2, Q_CUB = 3;
+  function match(q, i, j) {
+    switch (q) {
+      case Q_GROWN: return age[j] >= SP[sp[j]].mature * 0.6;
+      case Q_MATE: return male[j] !== male[i] && ready(j, SP[sp[i]]);
+      case Q_ANY: return true;
+      default: return age[j] < SP[3].mature;   // Q_CUB: a lion cub
+    }
+  }
+  function findNearest(i, R, mask, q) {
+    const ax = x[i], ay = y[i];
+    if (!anyInBox(ax - R, ay - R, ax + R, ay + R, mask)) return -1;
+    for (let d = 1; d <= R; d++) {
+      const yA = ay - d, yB = ay + d, xL = ax - d, xR = ax + d;
+      for (let xx = Math.max(0, xL); xx <= Math.min(W - 1, xR); xx++) {
+        let j;
+        if (yA >= 0 && (j = occ[yA * W + xx]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
+        if (yB < H && (j = occ[yB * W + xx]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
+      }
+      for (let yy = Math.max(0, yA + 1); yy <= Math.min(H - 1, yB - 1); yy++) {
+        let j;
+        if (xL >= 0 && (j = occ[yy * W + xL]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
+        if (xR < W && (j = occ[yy * W + xR]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
+      }
+    }
+    return -1;
+  }
+
+  function ready(i, S) {
+    if (age[i] < S.mature || cd[i] > 0) return false;
+    if (male[i]) return energy[i] > S.maxE * 0.4;
+    return preg[i] === 0 && energy[i] > S.maxE * S.mateAt;
+  }
+  function crowd(i, R) {
+    let n = 0;
+    const s = sp[i];
+    for (let yy = Math.max(0, y[i] - R); yy <= Math.min(H - 1, y[i] + R); yy++)
+      for (let xx = Math.max(0, x[i] - R); xx <= Math.min(W - 1, x[i] + R); xx++) {
+        const j = occ[yy * W + xx];
+        if (j >= 0 && j !== i && sp[j] === s) n++;
+      }
+    return n;
+  }
+  function countAdj(j, s) {
+    let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const xx = x[j] + dx, yy = y[j] + dy;
+      if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+      const k = occ[yy * W + xx];
+      if (k >= 0 && sp[k] === s) n++;
+    }
+    return n;
+  }
+  function effStrength(i) {
+    const S = SP[sp[i]];
+    return (S.strength || 1) * (age[i] < S.mature ? 0.45 : 1) * (0.6 + 0.4 * Math.min(1, energy[i] / S.maxE));
+  }
+  // Same formula as the master's catchProb (sim-core), read from the snapshot.
+  function catchProb(i, j) {
+    const S = SP[sp[i]], P = SP[sp[j]];
+    let res = P.resistance * Math.sqrt(10 / effStrength(i));
+    if (age[j] < P.mature) res *= 0.55;
+    res *= 0.7 + 0.3 * Math.min(1, energy[j] / P.maxE);
+    if (age[j] > life[j] * 0.85) res *= 0.7;
+    if (P.hides && cover[y[j] * W + x[j]]) res = 1 - (1 - res) * 0.5;
+    res = Math.min(0.97, res);
+    const helpers = S.coop ? Math.min(3, countAdj(j, sp[i]) - (cheb(i, j) <= 1 ? 1 : 0)) : 0;
+    return Math.min(0.95, S.skill * (age[i] < S.mature ? 0.6 : 1) * (1 + 0.3 * Math.max(0, helpers)) * (1 - res));
+  }
+
+  // Predators pick the best expected meal per distance, but "switch" toward whatever prey is
+  // common around them (a search image), so rare prey get a refuge.
+  const candI = new Int32Array(1024), candS = new Float64Array(1024), cnt = [0, 0, 0];
+  function bestPrey(i, S) {
+    const R = S.sight, ax = x[i], ay = y[i];
+    const x0 = Math.max(0, ax - R), x1 = Math.min(W - 1, ax + R), y0 = Math.max(0, ay - R), y1 = Math.min(H - 1, ay + R);
+    if (!anyInBox(x0, y0, x1, y1, PREY_MASK)) return -1;
+    let nc = 0; cnt[0] = cnt[1] = cnt[2] = 0;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const j = occ[yy * W + xx];
+      if (j < 0 || sp[j] > 2) continue;
+      const P = SP[sp[j]];
+      if (P.hides && cover[yy * W + xx] && Math.max(Math.abs(xx - ax), Math.abs(yy - ay)) > 3) continue;
+      cnt[sp[j]]++;
+      const p = catchProb(i, j);
+      const ev = p * P.food * (age[j] < P.mature ? 0.5 : 1) - (1 - p) * (2 + P.counter * P.counterDmg);
+      if (ev <= 0 || nc >= 1024) continue;
+      const dx = xx - ax, dy = yy - ay;
+      candI[nc] = j; candS[nc] = ev / (Math.sqrt(dx * dx + dy * dy) + 3); nc++;
+    }
+    const tot = cnt[0] + cnt[1] + cnt[2];
+    let best = -1, bs = 0;
+    for (let k = 0; k < nc; k++) {
+      const share = cnt[sp[candI[k]]] / tot, sc = candS[k] * share * share;
+      if (sc > bs) { bs = sc; best = candI[k]; }
+    }
+    return best;
+  }
+
+  function out(i, mode, t) { outMode[i] = mode; outTgt[i] = t; }
+  function thinkPrey(i, S) {
+    if (S.flees || alert[i] > 0) {
+      const t = findNearest(i, S.sight + (alert[i] > 0 ? 2 : 0), PRED_MASK, Q_GROWN);
+      if (t >= 0) return out(i, M.flee, t);
+    }
+    if (ready(i, S) && (male[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
+      const m = findNearest(i, S.sight * 2, 1 << sp[i], Q_MATE);
+      if (m >= 0) return out(i, M.mate, m);
+    }
+    out(i, M.graze, -1);
+  }
+  function thinkPred(i, S) {
+    const s = sp[i], juv = age[i] < S.mature, ef = energy[i] / S.maxE, rival = s === 3 ? 4 : 3;
+    if (s === 4) {   // cheetahs avoid grown lions
+      const l = findNearest(i, 4, 1 << 3, Q_GROWN);
+      if (l >= 0) return out(i, M.flee, l);
+    }
+    if (juv && age[i] < S.mature * 0.6 && mom[i] >= 0) return out(i, M.follow, mom[i]);
+    if (!juv && hrand(meta[1], meta[0], id[i]) < S.aggression) {
+      // Lions attack cheetahs; cheetahs pick on unguarded lion cubs.
+      const t = findNearest(i, 5, 1 << rival, s === 3 ? Q_ANY : Q_CUB);
+      if (t >= 0) return out(i, M.attack, t);
+    }
+    if (ef < S.hungerAt && atk[i] === 0) {
+      const p = bestPrey(i, S);
+      return p >= 0 ? out(i, M.hunt, p) : out(i, M.search, -1);
+    }
+    if (ready(i, S) && (male[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
+      const m = findNearest(i, S.sight * 3, 1 << s, Q_MATE);
+      return m >= 0 ? out(i, M.mate, m) : out(i, M.wander, -1);
+    }
+    out(i, M.rest, -1);
+  }
+  function decide(i) {
+    const S = SP[sp[i]];
+    if (S.isPrey) thinkPrey(i, S); else thinkPred(i, S);
+    doneGen[i] = meta[2];
+  }
+  // Take blocks of due animals until none are left (master and slaves call this together).
+  function work(ctrl) {
+    for (;;) {
+      const s = Atomics.add(ctrl, C_NEXT, BLOCK), n = Atomics.load(ctrl, C_COUNT);
+      if (s >= n) return;
+      const e = Math.min(n, s + BLOCK);
+      for (let k = s; k < e; k++) decide(due[k]);
+    }
+  }
+  return { MODES, M, C_GEN, C_NEXT, C_COUNT, C_DONE, C_STOP, C_SIZE, setup, layout, views, bind, decide, work, hrand };
+})();
+if (typeof module !== 'undefined') module.exports = THINK;
+</script>
+
 <script id="sim-core">
 const GOL = (() => {
   'use strict';
@@ -460,7 +688,7 @@ const GOL = (() => {
     { key:'cheetah', name:'Cheetah', plural:'Cheetahs', role:'Predator B', isPrey:false,
       color:'#ff5468', speed:2.0, sight:9, maxE:130, metab:0.45, moveCost:0.07,
       mature:170, gestation:85, litter:[1,3], cooldown:180, life:[1300,1700],
-      strength:6, skill:0.62, hungerAt:0.72, aggression:0.04, birthCost:0.1, mateAt:0.6, crowdR:14, crowdMax:3, recover:8, chase:10 },
+      strength:6, skill:0.65, hungerAt:0.72, aggression:0.04, birthCost:0.1, mateAt:0.6, crowdR:14, crowdMax:3, recover:8, chase:10 },
   ];
 
   function mulberry32(a) {
@@ -595,7 +823,7 @@ const GOL = (() => {
       preg: 0, cd: 0, think: (r() * 3) | 0, mode: S.isPrey ? 'graze' : 'rest', tgt: null,
       face: r() < 0.5 ? 1 : -1, acc: r(), atk: 0, alert: 0, hx: 1, hy: 0,
       life: S.life[0] + r() * (S.life[1] - S.life[0]), mom: null, injected: false,
-      cause: null, by: -1, gen: 0, chase: 0, fam: '', sireFam: '', named: false,
+      cause: null, by: -1, gen: 0, chase: 0, fam: '', sireFam: '', named: false, _i: -1, rethink: false,
     };
     newHeading(a, r);
     w.occ[y * W + x] = a;
@@ -658,29 +886,6 @@ const GOL = (() => {
     return false;
   }
 
-  function findNearest(w, a, R, mask, pred) {
-    if (!anyInBox(w, a.x - R, a.y - R, a.x + R, a.y + R, mask)) return null;
-    const occ = w.occ;
-    const chk = (x, y) => {
-      const o = occ[y * W + x];
-      return (o && o !== a && ((mask >> o.sp) & 1) && pred(o)) ? o : null;
-    };
-    for (let d = 1; d <= R; d++) {
-      const yA = a.y - d, yB = a.y + d, xL = a.x - d, xR = a.x + d;
-      for (let x = Math.max(0, xL); x <= Math.min(W - 1, xR); x++) {
-        let o;
-        if (yA >= 0 && (o = chk(x, yA))) return o;
-        if (yB < H && (o = chk(x, yB))) return o;
-      }
-      for (let y = Math.max(0, yA + 1); y <= Math.min(H - 1, yB - 1); y++) {
-        let o;
-        if (xL >= 0 && (o = chk(xL, y))) return o;
-        if (xR < W && (o = chk(xR, y))) return o;
-      }
-    }
-    return null;
-  }
-
   function adjacentOf(w, a, sp) {
     for (let k = 0; k < 8; k++) {
       const x = a.x + D8[k][0], y = a.y + D8[k][1];
@@ -729,6 +934,7 @@ const GOL = (() => {
     a.mom = null; a.tgt = null; // let dead ancestors be garbage-collected
     const i = a.y * W + a.x;
     if (w.occ[i] === a) w.occ[i] = null;
+    if (SNAP && a._i >= 0 && SNAP.occ[i] === a._i) SNAP.occ[i] = -1;   // keep the day's snapshot map live
     w.deaths[a.sp][cause]++;
     if (cause === 'starve' || cause === 'age') emit(w, { t: 'death', sp: a.sp, x: a.x, y: a.y, cause });
   }
@@ -762,7 +968,7 @@ const GOL = (() => {
     for (let y = Math.max(0, o.y - R); y <= Math.min(H - 1, o.y + R); y++)
       for (let x = Math.max(0, o.x - R); x <= Math.min(W - 1, o.x + R); x++) {
         const k = w.occ[y * W + x];
-        if (k && k !== o && k.sp === o.sp) { k.alert = 8; k.think = 0; }
+        if (k && k !== o && k.sp === o.sp) { k.alert = 8; k.think = 0; k.rethink = true; }
       }
   }
 
@@ -777,10 +983,10 @@ const GOL = (() => {
       feed(w, a, food);
       w.kills[a.sp]++;
       emit(w, { t: 'kill', sp: a.sp, prey: o.sp, x: ox, y: oy });
-      a.tgt = null; a.think = 0;
+      a.tgt = null; a.think = 0; a.rethink = true;
     } else {
       a.energy -= 2;
-      o.alert = 10; o.think = 0;
+      o.alert = 10; o.think = 0; o.rethink = true;
       if (P.flees) alarm(w, o, 4);
       if (P.counter > 0) {
         const c = P.counter + 0.08 * countAdj(w, o, o.sp);
@@ -806,7 +1012,7 @@ const GOL = (() => {
     if (killed) die(w, lose, 'fight', win.sp);
     else { lose.mode = 'flee'; lose.tgt = win; lose.think = 8; }
     if (win.alive && win.energy <= 0) die(w, win, 'fight', lose.sp);
-    if (win.alive) { win.tgt = null; win.mode = 'rest'; win.think = 0; }
+    if (win.alive) { win.tgt = null; win.mode = 'rest'; win.think = 0; win.rethink = true; }
     w.fights++;
     emit(w, { t: 'fight', x: fx, y: fy, win: win.sp, lose: lose.sp, killed });
   }
@@ -843,30 +1049,6 @@ const GOL = (() => {
   }
 
   // ---------- decision making ----------
-  function readyToMate(a, S) {
-    if (a.age < S.mature || a.cd > 0) return false;
-    if (a.male) return a.energy > S.maxE * 0.4;
-    return a.preg === 0 && a.energy > S.maxE * S.mateAt;
-  }
-
-  function seekMate(w, a, S, R) {
-    return findNearest(w, a, R, 1 << a.sp, o => o.male !== a.male && readyToMate(o, S));
-  }
-
-  function thinkPrey(w, a, S) {
-    a.tgt = null;
-    if (S.flees || a.alert > 0) {
-      const R = S.sight + (a.alert > 0 ? 2 : 0);
-      const t = findNearest(w, a, R, PRED_MASK, o => o.age >= SPECIES[o.sp].mature * 0.6);
-      if (t) { a.mode = 'flee'; a.tgt = t; return; }
-    }
-    if (readyToMate(a, S) && (a.male || crowd(w, a, S.crowdR) <= S.crowdMax)) {
-      const m = seekMate(w, a, S, S.sight * 2);
-      if (m) { a.mode = 'mate'; a.tgt = m; return; }
-    }
-    a.mode = 'graze';
-  }
-
   // Density-dependent breeding: females won't breed where their own kind is already crowded
   // (intraspecific competition / territoriality). This is what lets competing species coexist.
   function crowd(w, a, R) {
@@ -879,64 +1061,93 @@ const GOL = (() => {
     return n;
   }
 
-  // Predators pick the prey with the best expected meal per distance, but they "switch"
-  // toward whatever prey type is common around them (a search image). Rare prey get
-  // overlooked, which gives them a refuge and stabilises the food web.
-  const _cand = [], _cnt = [0, 0, 0];
-  function bestPrey(w, a, S) {
-    const R = S.sight;
-    const x0 = Math.max(0, a.x - R), x1 = Math.min(W - 1, a.x + R), y0 = Math.max(0, a.y - R), y1 = Math.min(H - 1, a.y + R);
-    if (!anyInBox(w, x0, y0, x1, y1, PREY_MASK)) return null;
-    _cand.length = 0; _cnt[0] = _cnt[1] = _cnt[2] = 0;
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const o = w.occ[y * W + x];
-      if (!o || o.sp > 2) continue;
-      const P = SPECIES[o.sp];
-      if (P.hides && w.cover[y * W + x] && Math.max(Math.abs(x - a.x), Math.abs(y - a.y)) > 3) continue;
-      _cnt[o.sp]++;
-      const p = catchProb(w, a, o);
-      const ev = p * P.food * (o.age < P.mature ? 0.5 : 1) - (1 - p) * (2 + P.counter * P.counterDmg);
-      if (ev <= 0) continue;
-      const dx = x - a.x, dy = y - a.y;
-      _cand.push(o, ev / (Math.sqrt(dx * dx + dy * dy) + 3));
-    }
-    const tot = _cnt[0] + _cnt[1] + _cnt[2];
-    let best = null, bs = 0;
-    for (let k = 0; k < _cand.length; k += 2) {
-      const o = _cand[k], share = _cnt[o.sp] / tot;
-      const sc = _cand[k + 1] * share * share;
-      if (sc > bs) { bs = sc; best = o; }
-    }
-    _cand.length = 0;
-    return best;
+  // ---------- thinking: a snapshot of the day, decided by THINK (on 1 or more threads) ----------
+  // The master (this code) owns the animals. Each day it copies what thinking needs into typed
+  // arrays and lists the animals due to think; a "thinker" (the Web Worker pool, when the
+  // browser allows shared memory) shares those decisions out between threads. Without one,
+  // the same THINK code runs here, so results never depend on the number of threads.
+  THINK.setup({ species: SPECIES, W, H, CH });
+  const SNAP_CAP = MAX_ANIMALS + 16;
+  let SNAP = null, thinker = null, snapCoverOf = null, thinkGen = 0;
+  // Optional timing (GOL.prof.on = true): where each day's time goes, for tuning multicore.
+  const prof = { on: false, days: 0, snap: 0, think: 0, loop: 0, pre: 0, inline: 0 };
+  function ensureSnap() {
+    if (SNAP) return;
+    const { bytes } = THINK.layout(SNAP_CAP, N);
+    const buf = thinker ? thinker.alloc(bytes) : new ArrayBuffer(bytes);
+    SNAP = THINK.views(buf, SNAP_CAP, N);
+    THINK.bind(SNAP);
+    if (thinker) thinker.attach(buf, SNAP_CAP, N);
+    snapCoverOf = null; snapN = 0;
   }
-
-  function thinkPred(w, a, S) {
-    a.tgt = null;
-    const juv = a.age < S.mature;
-    const ef = a.energy / S.maxE;
-    const rival = a.sp === 3 ? 4 : 3;
-    if (a.sp === 4) { // cheetahs avoid grown lions
-      const l = findNearest(w, a, 4, 1 << 3, o => o.age >= SPECIES[3].mature * 0.6);
-      if (l) { a.mode = 'flee'; a.tgt = l; return; }
+  function setThinker(t) { thinker = t || null; SNAP = null; ensureSnap(); }
+  // ahead = true (the morning snapshot): record each animal as update() will see it when it
+  // thinks, i.e. after this day's ageing, energy cost and countdowns. Inline rows are already live.
+  function snapRow(S, a, k, ahead) {
+    S.x[k] = a.x; S.y[k] = a.y; S.sp[k] = a.sp; S.male[k] = a.male ? 1 : 0; S.life[k] = a.life; S.id[k] = a.id;
+    if (ahead) {
+      const P = SPECIES[a.sp], age = a.age + 1;
+      S.age[k] = age;
+      S.energy[k] = a.energy - P.metab * (age < P.mature ? 0.75 : 1) * (a.preg > 0 ? 1.15 : 1);
+      S.preg[k] = a.preg > 0 ? a.preg - 1 : 0; S.cd[k] = a.cd > 0 ? a.cd - 1 : 0;
+      S.atk[k] = a.atk > 0 ? a.atk - 1 : 0; S.alert[k] = a.alert > 0 ? a.alert - 1 : 0;
+    } else {
+      S.age[k] = a.age; S.energy[k] = a.energy; S.preg[k] = a.preg; S.cd[k] = a.cd; S.atk[k] = a.atk; S.alert[k] = a.alert;
     }
-    if (juv && a.age < S.mature * 0.6 && a.mom && a.mom.alive) { a.mode = 'follow'; a.tgt = a.mom; return; }
-    if (!juv && w.rand() < S.aggression) {
-      // Lions attack cheetahs; cheetahs pick on unguarded lion cubs.
-      const t = findNearest(w, a, 5, 1 << rival, o => a.sp === 3 || o.age < SPECIES[3].mature);
-      if (t) { a.mode = 'attack'; a.tgt = t; return; }
+  }
+  let snapN = 0;   // rows in yesterday's snapshot
+  function snapshot(w) {
+    ensureSnap();
+    const S = SNAP, A = w.animals, n = A.length, occ = S.occ, due = S.due;
+    if (snapCoverOf !== w) { S.cover.set(w.cover); occ.fill(-1); snapCoverOf = w; }
+    else for (let k = 0; k < snapN; k++) { const c = S.y[k] * W + S.x[k]; if (occ[c] === k) occ[c] = -1; }   // clear only yesterday's cells
+    S.chunks.set(w.chunks);
+    let d = 0;
+    for (let k = 0; k < n; k++) {
+      const a = A[k];
+      a._i = k; occ[a.y * W + a.x] = k; snapRow(S, a, k, true);
+      if (a.think <= 1) due[d++] = k;   // update() decrements first
     }
-    if (ef < S.hungerAt && a.atk === 0) {
-      const p = bestPrey(w, a, S);
-      if (p) { a.mode = 'hunt'; a.tgt = p; return; }
-      a.mode = 'search'; return;
+    for (let k = 0; k < n; k++) { const m = A[k].mom; S.mom[k] = m && m.alive && A[m._i] === m ? m._i : -1; }
+    S.meta[0] = w.tick; S.meta[1] = w.seed | 0; S.meta[2] = ++thinkGen;
+    snapN = n;
+    return d;
+  }
+  function runThinking(nd, side) {
+    if (thinker && thinker.run(nd, side)) return;
+    side();
+    for (let k = 0; k < nd; k++) THINK.decide(SNAP.due[k]);
+  }
+  // Grass regrowth (slow when nearly bare: overgrazing hurts). Thinking never reads grass.
+  function regrow(w, si) {
+    const base = 0.035 * si.factor * w.rain;
+    const g = w.grass, f = w.fert, cap = w.cap, ter = w.terrain;
+    let gsum = 0;
+    for (let i = 0; i < N; i++) {
+      if (ter[i] !== T_GRASS) continue;
+      const c = cap[i], v = g[i];
+      if (v < c) { const nv = v + base * f[i] * (0.3 + v) * (1 - v / c); g[i] = nv > c ? c : nv; }
+      else if (v > c) g[i] = c;
+      gsum += g[i];
     }
-    if (readyToMate(a, S) && (a.male || crowd(w, a, S.crowdR) <= S.crowdMax)) {
-      const m = seekMate(w, a, S, S.sight * 3);
-      if (m) { a.mode = 'mate'; a.tgt = m; return; }
-      a.mode = 'wander'; return;
+    w.avgGrass = gsum / Math.max(1, w.landCells);
+  }
+  // Apply animal k's decision. Animals that had to think unexpectedly (an alarm, a lost target)
+  // refresh their own row and decide here on the master.
+  function think(w, a, k, S) {
+    let t = -1;
+    if (SNAP.doneGen[k] === thinkGen && !a.rethink) {   // decided this morning (maybe by a helper)
+      t = SNAP.outTgt[k];
+      if (t < 0 || w.animals[t].alive) { a.mode = THINK.MODES[SNAP.outMode[k]]; a.tgt = t >= 0 ? w.animals[t] : null; return; }
     }
-    a.mode = 'rest';
+    // Something changed since the morning (alarm, lost target): decide now from the live map.
+    a.rethink = false;
+    if (prof.on) prof.inline++;
+    snapRow(SNAP, a, k, false); THINK.decide(k);
+    a.mode = THINK.MODES[SNAP.outMode[k]];
+    t = SNAP.outTgt[k];
+    a.tgt = t >= 0 && w.animals[t].alive ? w.animals[t] : null;
+    if (t >= 0 && !a.tgt) a.mode = S.isPrey ? 'graze' : 'search';
   }
 
   function moveStep(w, a) {
@@ -969,12 +1180,13 @@ const GOL = (() => {
     if (bx < 0) { newHeading(a, r); return false; }
     if (!t && r() < 0.06) newHeading(a, r);
     occ[ci] = null; occ[by * W + bx] = a;
+    if (a._i >= 0 && SNAP.occ[ci] === a._i) { SNAP.occ[ci] = -1; SNAP.occ[by * W + bx] = a._i; SNAP.x[a._i] = bx; SNAP.y[a._i] = by; }
     if (bx !== a.x) a.face = bx > a.x ? 1 : -1;
     a.x = bx; a.y = by;
     return true;
   }
 
-  function update(w, a) {
+  function update(w, a, k) {
     const S = SPECIES[a.sp], r = w.rand;
     a.age++;
     if (a.age >= a.life) { die(w, a, 'age'); return; }
@@ -985,8 +1197,8 @@ const GOL = (() => {
     if (a.atk > 0) a.atk--;
     if (a.alert > 0) a.alert--;
     if (a.preg > 0 && --a.preg === 0) giveBirth(w, a);
-    if (a.tgt && !a.tgt.alive) { a.tgt = null; a.think = 0; }
-    if (--a.think <= 0) { (S.isPrey ? thinkPrey : thinkPred)(w, a, S); a.think = 2 + ((r() * 3) | 0); }
+    if (a.tgt && !a.tgt.alive) { a.tgt = null; a.think = 0; a.rethink = true; }
+    if (--a.think <= 0) { think(w, a, k, S); a.think = 2 + ((r() * 3) | 0); }
     a.acc += S.speed;
     while (a.acc >= 1) {
       a.acc -= 1;
@@ -1038,25 +1250,19 @@ const GOL = (() => {
   function step(w) {
     w.tick++;
     const si = seasonInfo(w);
-    // grass regrowth (slow when nearly bare: overgrazing hurts)
-    const base = 0.035 * si.factor * w.rain;
-    const g = w.grass, f = w.fert, cap = w.cap, ter = w.terrain;
-    let gsum = 0;
-    for (let i = 0; i < N; i++) {
-      if (ter[i] !== T_GRASS) continue;
-      const c = cap[i], v = g[i];
-      if (v < c) { const nv = v + base * f[i] * (0.3 + v) * (1 - v / c); g[i] = nv > c ? c : nv; }
-      else if (v > c) g[i] = c;
-      gsum += g[i];
-    }
-    w.avgGrass = gsum / Math.max(1, w.landCells);
-
     const A = w.animals, ch = w.chunks;
+    if (thinker && thinker.prewake && A.length > 200) thinker.prewake();   // helpers wake while we build the snapshot
     ch.fill(0);
     for (const a of A) ch[a.sp * CN + ((a.y / CH) | 0) * CW + ((a.x / CH) | 0)]++;
     for (let i = A.length - 1; i > 0; i--) { const j = (w.rand() * (i + 1)) | 0; const t = A[i]; A[i] = A[j]; A[j] = t; }
+    const p0 = prof.on ? performance.now() : 0;
+    const nd = snapshot(w);
+    const p1 = prof.on ? performance.now() : 0;
+    runThinking(nd, () => regrow(w, si));   // grass regrows on the master while helpers think
+    const p2 = prof.on ? performance.now() : 0;
     const n = A.length;
-    for (let k = 0; k < n; k++) { const a = A[k]; if (a.alive) update(w, a); }
+    for (let k = 0; k < n; k++) { const a = A[k]; if (a.alive) update(w, a, k); }
+    if (prof.on) { const p3 = performance.now(); prof.days++; prof.snap += p1 - p0; prof.think += p2 - p1; prof.loop += p3 - p2; prof.pre += nd; }
     let wi = 0;
     for (let k = 0; k < A.length; k++) if (A[k].alive) A[wi++] = A[k];
     A.length = wi;
@@ -1105,7 +1311,7 @@ const GOL = (() => {
   }
 
   return { W, H, N, YEAR, SPECIES, CAUSES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY, MAX_ANIMALS,
-    createWorld, step, inject, seasonInfo, shannon, catchProb };
+    CH, prof, createWorld, step, inject, seasonInfo, shannon, catchProb, setThinker };
 })();
 if (typeof module !== 'undefined') module.exports = GOL;
 </script>
@@ -1224,6 +1430,88 @@ const storage = {
   get(k, d) { try { const v = localStorage.getItem('gol.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('gol.' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
 };
+
+// ---------------- multicore: one master thread + helper (slave) workers ----------------
+// The master (this page) runs the simulation. Each day the animals' decisions ("thinking", about
+// half the work) are shared out to helper Web Workers through shared memory (see THINK in
+// think-core). Needs cross-origin isolation (coi-sw.js); otherwise everything runs here.
+const Pool = (() => {
+  const cores = navigator.hardwareConcurrency || 2;
+  const ok = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true &&
+    typeof Atomics !== 'undefined' && typeof Worker !== 'undefined' && cores >= 2;
+  if (!ok) return { available: false, cores, max: 0, threads: 1, setThreads() {} };
+  const MAX = Math.max(1, Math.min(7, cores - 1));   // helpers: leave room for the master
+  const C_ACTIVE = 5, C_WAKE = 6, C_READY = 7;
+  const src = document.getElementById('think-core').textContent + `
+onmessage = e => {
+  const d = e.data;
+  THINK.setup(d.cfg); THINK.bind(THINK.views(d.buf, d.cap, d.n));
+  const ctrl = new Int32Array(d.ctrl);
+  let seen = Atomics.load(ctrl, THINK.C_GEN), wseen = Atomics.load(ctrl, ${C_WAKE});
+  Atomics.add(ctrl, ${C_READY}, 1);
+  for (;;) {
+    // Sleep until the master says a day is coming (WAKE), then spin briefly until it starts (GEN).
+    while (Atomics.load(ctrl, THINK.C_GEN) === seen) {
+      if (Atomics.load(ctrl, ${C_WAKE}) !== wseen) {
+        wseen = Atomics.load(ctrl, ${C_WAKE});
+        const t0 = performance.now();
+        while (Atomics.load(ctrl, THINK.C_GEN) === seen && performance.now() - t0 < 4) { /* spin */ }
+      } else Atomics.wait(ctrl, ${C_WAKE}, wseen, 50);
+    }
+    seen = Atomics.load(ctrl, THINK.C_GEN);
+    if (Atomics.load(ctrl, THINK.C_STOP)) return;
+    if (d.idx < Atomics.load(ctrl, ${C_ACTIVE})) THINK.work(ctrl);
+    wseen = Atomics.load(ctrl, ${C_WAKE});   // this day's wake-up is used up: sleep, don't spin
+    Atomics.add(ctrl, THINK.C_DONE, 1);   // every helper checks in once per day
+  }
+};`;
+  const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  let ctrl = null, workers = [], dead = false, active = MAX;
+  const P = {
+    available: true, cores, max: MAX, minBatch: 64, lastError: '',
+    alloc: bytes => new SharedArrayBuffer(bytes),
+    attach(buf, cap, n) {
+      for (const wk of workers) wk.terminate();
+      ctrl = new Int32Array(new SharedArrayBuffer(THINK.C_SIZE * 4));
+      Atomics.store(ctrl, C_ACTIVE, active);
+      workers = [];
+      for (let i = 0; i < MAX; i++) {
+        const wk = new Worker(url);
+        wk.onerror = e => { P.lastError = e.message || 'worker error'; P.fail(); };
+        wk.postMessage({ idx: i, cfg: { species: GOL.SPECIES, W: GOL.W, H: GOL.H, CH: GOL.CH }, buf, cap, n, ctrl: ctrl.buffer });
+        workers.push(wk);
+      }
+    },
+    get threads() { return dead ? 1 : active + 1; },
+    setThreads(t) { active = Math.max(0, Math.min(MAX, (t | 0) - 1)); if (ctrl) Atomics.store(ctrl, C_ACTIVE, active); },
+    prewake() { if (!dead && active > 0 && ctrl) { Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE); } },
+    // Returns false when the master should just think alone (few animals, helpers not ready).
+    // side(): master-only work (grass) done while the helpers think.
+    run(count, side) {
+      if (dead || active === 0 || count < P.minBatch || !ctrl || Atomics.load(ctrl, C_READY) < workers.length) return false;
+      Atomics.store(ctrl, THINK.C_COUNT, count); Atomics.store(ctrl, THINK.C_NEXT, 0); Atomics.store(ctrl, THINK.C_DONE, 0);
+      Atomics.add(ctrl, THINK.C_GEN, 1); Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE);
+      if (side) side();
+      THINK.work(ctrl);   // then the master takes a share of the thinking too
+      const t0 = performance.now();
+      while (Atomics.load(ctrl, THINK.C_DONE) < workers.length) {
+        if (performance.now() - t0 > 400) { P.lastError = 'helper timed out'; P.fail(); break; }
+      }
+      return true;   // any decision a helper didn't finish is redone by the master (see think())
+    },
+    fail() {
+      if (dead) return;
+      dead = true;
+      if (ctrl) { Atomics.store(ctrl, THINK.C_STOP, 1); Atomics.add(ctrl, THINK.C_GEN, 1); Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE); }
+      for (const wk of workers) wk.terminate();
+      workers = [];
+      console.warn('Multicore turned off:', P.lastError);
+      if (typeof updateCpuUI === 'function') updateCpuUI();
+    },
+  };
+  return P;
+})();
+if (Pool.available) GOL.setThinker(Pool);
 
 // ---------------- colour helpers ----------------
 const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -2328,6 +2616,21 @@ function newWorld(preset, isDemo) {
   updateSidebar(); updateObjectives(); drawCharts();
 }
 
+// ---------------- CPU / multicore setting ----------------
+function updateCpuUI() {
+  const box = $('#multicore');
+  if (!Pool.available || Pool.threads === 1 && Pool.lastError) {
+    box.checked = false; box.disabled = true;
+    $('#cpuText').textContent = Pool.lastError ? '(off: ' + Pool.lastError + ')' : '(1 thread: needs the online version)';
+  } else {
+    box.disabled = false;
+    $('#cpuText').textContent = box.checked ? `(${Pool.threads} threads)` : '(1 thread)';
+  }
+}
+$('#multicore').checked = storage.get('multicore', true);
+$('#multicore').onchange = e => { storage.set('multicore', e.target.checked); Pool.setThreads(e.target.checked ? 99 : 1); updateCpuUI(); };
+Pool.setThreads($('#multicore').checked ? 99 : 1);
+
 // ---------------- family names ----------------
 const NAMES = ['Sunny', 'Biscuit', 'Zuri', 'Pip', 'Mango', 'Pebble', 'Kiki', 'Juno', 'Ziggy', 'Coco', 'Bean', 'Maple',
   'Tumble', 'Rosie', 'Echo', 'Bramble', 'Olive', 'Dot', 'Waffles', 'Pickle', 'Nova', 'Rio', 'Sage', 'Toffee', 'Breezy',
@@ -2693,12 +2996,24 @@ if (DEBUG) window.golDebug = {
   get world() { return world; }, get hover() { return hover; }, get selected() { return selected; },
   get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
   setSelected(a) { selected = a; updateTracker(); }, setFollow, pickRadius,
-  get pred() { return pred; }, parkRating, openPredict, openNamePicker, showResults,
+  get pred() { return pred; }, parkRating, openPredict, openNamePicker, showResults, Pool,
+  // Sim speed: ms per simulated day on a copy-free run of the current world.
+  bench(days, threads) { Pool.setThreads(threads); const t0 = performance.now(); for (let i = 0; i < days; i++) { GOL.step(world); world.events.length = 0; } const ms = (performance.now() - t0) / days; Pool.setThreads($('#multicore').checked ? 99 : 1); return ms; },
+  // Same seed, same days, different thread counts must give identical worlds.
+  parity(seed, days, threads) {
+    Pool.setThreads(threads);
+    const w = GOL.createWorld(seed, 'balanced');
+    for (let i = 0; i < days; i++) { GOL.step(w); w.events.length = 0; }
+    let h = 0;
+    for (const a of w.animals) h = (Math.imul(h, 31) + a.id * 7 + a.x * 131 + a.y * 977 + Math.round(a.energy * 100)) | 0;
+    Pool.setThreads($('#multicore').checked ? 99 : 1);
+    return { animals: w.animals.length, hash: h };
+  },
 };
 
 buildSidebar();
 buildObjectives();
-refreshDailyChoice(); showPredStats();
+refreshDailyChoice(); showPredStats(); updateCpuUI();
 setView(0); setSpeed(0); setSound(Sfx.on); setTool(-1);
 newWorld('balanced', true);
 setRunning(false);
