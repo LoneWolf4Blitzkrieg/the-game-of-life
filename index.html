@@ -1047,6 +1047,107 @@ const GOL = (() => {
 if (typeof module !== 'undefined') module.exports = GOL;
 </script>
 
+<!-- ===================== CAMERA CORE (no DOM) ===================== -->
+<script id="camera-core">
+// Which part of the world the map canvas shows, and how canvas points map to tiles.
+// Pure maths with no DOM, so tools/test-camera.js can run it in Node.
+// Units: tiles (the world grid), world px (tile * cell), canvas px (the 960 x 600 map canvas).
+// cam.x / cam.y = top-left of the visible window in world px. They stay fractional so slow
+// drags at high zoom still add up; srcRect() rounds them for drawing.
+const CAM = (() => {
+  'use strict';
+  const ZOOMS = Object.freeze([0.5, 1, 2, 3]);   // canvas px per world px: tiles are 3, 6, 12, 18 px
+  const DEFAULT_ZI = 1, DRAG_PX = 6;            // DRAG_PX: screen px a press may move and still be a click
+
+  const zoom = c => ZOOMS[c.zi];
+  const winW = c => c.viewW / zoom(c), winH = c => c.viewH / zoom(c);
+
+  // Keep the window inside the world, so the map never shows empty space past the edge.
+  function clamp(c) {
+    c.x = Math.max(0, Math.min(c.worldW * c.cell - winW(c), c.x));
+    c.y = Math.max(0, Math.min(c.worldH * c.cell - winH(c), c.y));
+    return c;
+  }
+  function create({ worldW, worldH, cell, viewW, viewH }) {
+    const c = { worldW, worldH, cell, viewW, viewH, zi: DEFAULT_ZI, x: 0, y: 0 };
+    c.x = (worldW * cell - winW(c)) / 2;
+    c.y = (worldH * cell - winH(c)) / 2;
+    return clamp(c);
+  }
+  function srcRect(c) { return { x: Math.round(c.x), y: Math.round(c.y), w: winW(c), h: winH(c) }; }
+  function centerOn(c, tx, ty) {
+    c.x = (tx + 0.5) * c.cell - winW(c) / 2;
+    c.y = (ty + 0.5) * c.cell - winH(c) / 2;
+    return clamp(c);
+  }
+  // dx, dy in canvas px; positive dx shows more of the east.
+  function panBy(c, dx, dy) {
+    c.x += dx / zoom(c);
+    c.y += dy / zoom(c);
+    return clamp(c);
+  }
+  // Change zoom level, keeping the world point under canvas point (ax, ay) where it is.
+  function setZoom(c, zi, ax = c.viewW / 2, ay = c.viewH / 2) {
+    const r = srcRect(c), wx = r.x + ax / zoom(c), wy = r.y + ay / zoom(c);
+    c.zi = Math.max(0, Math.min(ZOOMS.length - 1, zi | 0));
+    c.x = wx - ax / zoom(c);
+    c.y = wy - ay / zoom(c);
+    return clamp(c);
+  }
+  function canvasToTile(c, cx, cy) {
+    if (!(cx >= 0 && cy >= 0 && cx < c.viewW && cy < c.viewH)) return null;
+    const r = srcRect(c), z = zoom(c);
+    const x = Math.floor((r.x + cx / z) / c.cell), y = Math.floor((r.y + cy / z) / c.cell);
+    return x >= 0 && y >= 0 && x < c.worldW && y < c.worldH ? { x, y } : null;
+  }
+  // Canvas px of a tile's top-left corner (may be off the canvas).
+  function tileToCanvas(c, tx, ty) {
+    const r = srcRect(c), z = zoom(c);
+    return { x: (tx * c.cell - r.x) * z, y: (ty * c.cell - r.y) * z };
+  }
+  // Tiles at least partly visible (inclusive).
+  function visibleTiles(c) {
+    const r = srcRect(c);
+    return { x0: Math.floor(r.x / c.cell), y0: Math.floor(r.y / c.cell),
+      x1: Math.floor((r.x + r.w - 1) / c.cell), y1: Math.floor((r.y + r.h - 1) / c.cell) };
+  }
+  // Tiles completely visible (inclusive).
+  function fullTiles(c) {
+    const r = srcRect(c);
+    return { x0: Math.ceil(r.x / c.cell), y0: Math.ceil(r.y / c.cell),
+      x1: Math.floor((r.x + r.w) / c.cell) - 1, y1: Math.floor((r.y + r.h) / c.cell) - 1 };
+  }
+  function pullInside(c, tx, ty) {
+    const f = fullTiles(c);
+    return { x: Math.max(f.x0, Math.min(f.x1, tx)), y: Math.max(f.y0, Math.min(f.y1, ty)) };
+  }
+  // Pan as little as possible so tiles tx±margin, ty±margin are completely visible.
+  function ensureVisible(c, tx, ty, margin = 0) {
+    const r = srcRect(c);
+    const mx = Math.max(0, Math.min(margin, Math.floor((r.w / c.cell - 1) / 2)));
+    const my = Math.max(0, Math.min(margin, Math.floor((r.h / c.cell - 1) / 2)));
+    const left = (tx - mx) * c.cell, right = (tx + mx + 1) * c.cell;
+    const top = (ty - my) * c.cell, bottom = (ty + my + 1) * c.cell;
+    if (left < r.x) c.x = left; else if (right > r.x + r.w) c.x = right - r.w;
+    if (top < r.y) c.y = top; else if (bottom > r.y + r.h) c.y = bottom - r.h;
+    return clamp(c);
+  }
+  // Minimap of mmW x mmH px showing the whole world.
+  function minimapToTile(c, mx, my, mmW, mmH) {
+    return { x: Math.max(0, Math.min(c.worldW - 1, Math.floor(mx * c.worldW / mmW))),
+      y: Math.max(0, Math.min(c.worldH - 1, Math.floor(my * c.worldH / mmH))) };
+  }
+  function minimapViewRect(c, mmW, mmH) {
+    const r = srcRect(c), ww = c.worldW * c.cell, wh = c.worldH * c.cell;
+    return { x: r.x * mmW / ww, y: r.y * mmH / wh, w: r.w * mmW / ww, h: r.h * mmH / wh };
+  }
+
+  return { ZOOMS, DEFAULT_ZI, DRAG_PX, create, zoom, srcRect, centerOn, panBy, setZoom,
+    canvasToTile, tileToCanvas, visibleTiles, pullInside, ensureVisible, minimapToTile, minimapViewRect };
+})();
+if (typeof module !== 'undefined') module.exports = CAM;
+</script>
+
 <!-- ===================== RENDERING + UI ===================== -->
 <script>
 (() => {
