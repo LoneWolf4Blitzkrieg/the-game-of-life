@@ -22,6 +22,6 @@ test('one year runs with all five species alive', () => {
   const w = GOL.createWorld(7919, 'balanced');
   for (let t = 0; t < GOL.YEAR; t++) { GOL.step(w); w.events.length = 0; }
   assert.ok(w.counts.every(c => c > 0), w.counts.join());
-  assert.ok(w.animals.length < GOL.MAX_ANIMALS);
+  assert.ok(w.liveN < GOL.MAX_ANIMALS);
 });
 console.log('test-world: all passed');

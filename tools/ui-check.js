@@ -64,15 +64,23 @@
       if (w.terrain[y * W + x] !== T_GRASS) return false;
       for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
         const X = x + dx, Y = y + dy;
-        if (X >= 0 && Y >= 0 && X < W && Y < H && w.occ[Y * W + X]) return false;
+        if (X >= 0 && Y >= 0 && X < W && Y < H && w.v.occ[Y * W + X] >= 0) return false;
       }
       return true;
     };
     for (let y = v.y0 + 8; y <= v.y1 - 8; y++) for (let x = v.x0 + 8; x <= v.x1 - 8; x++) if (ok(x, y)) return { x, y };
     throw new Error('no free grass tile in view');
   }
-  const ids = () => new Set(D.world.animals.map(a => a.id));
-  const newAnimals = (before, sp) => D.world.animals.filter(a => !before.has(a.id) && a.sp === sp);
+  // AnimalRefs for every living animal (live[] may hold a few slots that died today).
+  function liveAnimals() {
+    const w = D.world, out = [];
+    for (let i = 0; i < w.liveN; i++) { const s = w.live[i]; if (w.v.alive[s]) out.push(D.ref(s)); }
+    return out;
+  }
+  const ids = () => new Set(liveAnimals().map(a => a.id));
+  const newAnimals = (before, sp) => liveAnimals().filter(a => !before.has(a.id) && a.sp === sp);
+  // Same tracked animal (or both nothing)?
+  const sameSel = (a, b) => a === b || !!(a && b && a.is(b));
 
   // ---------- setup / cleanup ----------
   async function setup() {
@@ -208,11 +216,11 @@
     D.resetCamera();
     const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected(), sel = D.selected;
     ptr('pointerdown', p.x, p.y, { button: 2 }); ptr('pointerup', p.x, p.y, { button: 2 });
-    check(injected() === before && D.selected === sel, 'right click acted');
+    check(injected() === before && sameSel(D.selected, sel), 'right click acted');
   });
   add('pointer', 'tooltip and preview hidden while dragging', async () => {
     const v = CAM.visibleTiles(D.cam);
-    const a = D.world.animals.find(a => a.alive && a.x > v.x0 + 10 && a.x < v.x1 - 10 && a.y > v.y0 + 10 && a.y < v.y1 - 10);
+    const a = liveAnimals().find(a => a.x > v.x0 + 10 && a.x < v.x1 - 10 && a.y > v.y0 + 10 && a.y < v.y1 - 10);
     check(a, 'no animal in view');
     const p = tileCenter(a.x, a.y), tt = document.querySelector('#tooltip');
     ptr('pointermove', p.x, p.y, { buttons: 0 });
@@ -342,14 +350,14 @@
   const inView = a => { const v = CAM.visibleTiles(D.cam); return a.x >= v.x0 && a.x <= v.x1 && a.y >= v.y0 && a.y <= v.y1; };
   // Track a living lion by clicking it with the inspect tool.
   async function trackLion() {
-    const a = D.world.animals.find(a => a.alive && a.sp === 3);
+    const a = liveAnimals().find(a => a.sp === 3);
     check(a, 'no living lion');
     CAM.centerOn(D.cam, a.x, a.y);
     await frames(1);
     key('0');
     const p = tileCenter(a.x, a.y);
     ptr('pointerdown', p.x, p.y); ptr('pointerup', p.x, p.y);
-    check(D.selected === a, 'click did not track the lion');
+    check(D.selected && a.is(D.selected), 'click did not track the lion');
     return a;
   }
   add('follow', 'F without a tracked animal shows a hint', async () => {
@@ -388,13 +396,17 @@
     window.addEventListener('error', onErr);
     const orig = console.error; console.error = (...a) => { errs.push(a.join(' ')); orig(...a); };
     try {
-      const a = D.world.animals.find(a => a.alive && a.sp === 3), twin = Object.assign({}, a);
-      D.setSelected(twin); D.setFollow(true);
+      const a = liveAnimals().find(a => a.sp === 3);
+      check(a, 'no living lion');
+      const slot = a.slot;
+      D.setSelected(D.ref(slot)); D.setFollow(true);
       check(D.follow === true, 'follow did not start');
-      twin.alive = false;
-      await frames(2);
-      check(D.follow === false, 'still following a dead animal');
-      await sleep(300);
+      D.world.v.alive[slot] = 0;   // the tracked animal dies
+      try {
+        await frames(2);
+        check(D.follow === false, 'still following a dead animal');
+        await sleep(300);
+      } finally { D.world.v.alive[slot] = 1; }
     } finally { window.removeEventListener('error', onErr); console.error = orig; }
     check(errs.length === 0, 'errors: ' + errs.join(' | '));
   });
