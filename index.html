@@ -70,7 +70,8 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
 .stage{padding:8px}
 .canvas-wrap{position:relative;margin:0 auto;max-width:calc((100vh - 150px) * 1.6);background:#000;border:2px solid var(--edge)}
-#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:manipulation}
+#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:none}
+#world.dragging{cursor:grabbing}
 .statusbar{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:18px}
 .statusbar b{color:var(--text);font-weight:normal}
 .legend-energy{display:inline-flex;align-items:center;gap:6px}
@@ -1516,7 +1517,7 @@ function render() {
     const c = (frameNo >> 3) & 1 ? GOLD : WHITE;
     rectOutline(selected.x * CELL - 2, selected.y * CELL - 2, CELL + 4, CELL + 4, c, true);
   }
-  if (hover) {
+  if (hover && !(drag && drag.moved)) {   // no hover preview while dragging the map
     if (tool >= 0) {
       const ok = world.terrain[hover.y * W + hover.x] === T_GRASS;
       drawSprite(sIdx(tool, 1, 0, 0, 0), hover.x, hover.y, true, !ok);
@@ -1862,7 +1863,7 @@ function animalAt(cx, cy) {
 let lastMouse = null;
 function updateTooltip() {
   const tt = $('#tooltip');
-  if (tool !== -1 || !hover || !lastMouse) { tt.style.display = 'none'; return; }
+  if (tool !== -1 || !hover || !lastMouse || (drag && drag.moved)) { tt.style.display = 'none'; return; }
   const a = animalAt(hover.x, hover.y);
   if (!a || a === selected) { tt.style.display = 'none'; return; }
   tt.innerHTML = animalHTML(a);
@@ -1970,14 +1971,72 @@ $('#btnZoomOut').onclick = () => zoomTo(cam.zi - 1);
 $('#btnZoomAll').onclick = () => {
   if (cam.zi !== 0) { zoomBeforeAll = cam.zi; zoomTo(0); } else zoomTo(zoomBeforeAll);
 };
-canvas.addEventListener('pointermove', e => { hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY }; updateTooltip(); });
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
+// Map pointer input. A press acts on release (left button or touch), unless it moved CAM.DRAG_PX
+// screen px or more: then it is a drag that pans the map and never acts. Two touches pinch-zoom.
+let drag = null;            // { id, button, sx, sy, lx, ly, moved, shift } for the press in progress
+const touches = new Map();  // pointerId -> { x, y } (client px) of touches on the map
+let pinchDist = 0;          // finger distance at the last pinch zoom step
+const touchDist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+function endDrag() {
+  drag = null; touches.clear(); pinchDist = 0;
+  canvas.classList.remove('dragging');
+}
 canvas.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
-  const c = cellFrom(e); if (!c) return;
-  actAt(c, e.shiftKey);
+  if (e.button === 1) e.preventDefault();   // no middle-click autoscroll
+  if (e.pointerType === 'touch') touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (drag && touches.size === 2) {         // a second finger: pinch, and the first press no longer acts
+    drag.moved = true; pinchDist = touchDist();
+    canvas.classList.add('dragging'); updateTooltip();
+    return;
+  }
+  if (drag) return;
+  drag = { id: e.pointerId, button: e.button, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, shift: e.shiftKey };
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers cannot be captured */ }
 });
+canvas.addEventListener('pointermove', e => {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (drag && touches.size === 2 && pinchDist > 0) {
+    if (e.pointerId === drag.id) { drag.lx = e.clientX; drag.ly = e.clientY; }   // no jump when one finger lifts
+    const d = touchDist(), [a, b] = [...touches.values()];
+    if (d >= pinchDist * 1.4 || d <= pinchDist / 1.4) {
+      const m = canvasPoint((a.x + b.x) / 2, (a.y + b.y) / 2);
+      zoomTo(cam.zi + (d > pinchDist ? 1 : -1), m.x, m.y);
+      pinchDist = d;
+    }
+    return;
+  }
+  if (drag && e.pointerId === drag.id) {
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) >= CAM.DRAG_PX) {
+      drag.moved = true; follow = false;
+      canvas.classList.add('dragging');
+    }
+    if (drag.moved) {
+      const k = VIEW_W / canvas.getBoundingClientRect().width;
+      CAM.panBy(cam, -(e.clientX - drag.lx) * k, -(e.clientY - drag.ly) * k);
+    }
+    drag.lx = e.clientX; drag.ly = e.clientY;
+  }
+  hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY };
+  updateTooltip();
+});
+canvas.addEventListener('pointerup', e => {
+  touches.delete(e.pointerId);
+  if (!drag || e.pointerId !== drag.id) { if (drag && touches.size < 2) pinchDist = 0; return; }
+  const d = drag;
+  endDrag();
+  if (!d.moved && d.button === 0) {
+    const c = cellFrom(e);
+    if (c) actAt(c, d.shift || e.shiftKey);
+  }
+  updateTooltip();
+});
+canvas.addEventListener('pointercancel', e => {
+  touches.delete(e.pointerId);
+  if (drag && e.pointerId === drag.id) endDrag();
+  updateTooltip();
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerleave', () => { if (drag) return; hover = null; lastMouse = null; updateTooltip(); });
 function actAt(c, shift) {
   Sfx.init();
   hover = c;

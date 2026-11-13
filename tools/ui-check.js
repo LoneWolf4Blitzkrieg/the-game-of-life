@@ -172,6 +172,73 @@
     key('Escape');
   });
 
+  // ---------- group: pointer (Task 5) ----------
+  // Screen px -> canvas px offsets, so wobble and drag distances are real screen distances.
+  const scr = px => px * screenToCanvas();
+  const injected = () => D.world.injected[2];
+  async function tapReleases(o) {
+    key('3');
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected();
+    ptr('pointerdown', p.x, p.y, o);
+    check(injected() === before, 'released on press');
+    ptr('pointerup', p.x, p.y, o);
+    check(injected() === before + 1, `injected ${before} -> ${injected()} after release`);
+  }
+  async function dragPans(o) {
+    key('3');
+    const before = injected(), x0 = CAM.srcRect(D.cam).x;
+    await dragBy(480, 300, scr(40), 0, o);
+    const want = Math.round(40 * VIEW_W / cv.getBoundingClientRect().width), got = x0 - CAM.srcRect(D.cam).x;
+    check(injected() === before, 'a drag released a couple');
+    check(Math.abs(got - want) <= 1, `window moved ${got} world px, want ${want}`);
+  }
+  add('pointer', 'click releases on release, not on press', () => tapReleases({}));
+  add('pointer', 'small wobble still counts as a click', async () => {
+    key('3');
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected();
+    ptr('pointerdown', p.x, p.y);
+    ptr('pointermove', p.x + scr(3), p.y + scr(2));
+    ptr('pointerup', p.x + scr(3), p.y + scr(2));
+    check(injected() === before + 1, `injected ${before} -> ${injected()}`);
+  });
+  add('pointer', 'drag pans and never releases', () => dragPans({}));
+  add('pointer', 'right-button drag pans; right click does nothing', async () => {
+    await dragPans({ button: 2 });
+    D.resetCamera();
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected(), sel = D.selected;
+    ptr('pointerdown', p.x, p.y, { button: 2 }); ptr('pointerup', p.x, p.y, { button: 2 });
+    check(injected() === before && D.selected === sel, 'right click acted');
+  });
+  add('pointer', 'tooltip and preview hidden while dragging', async () => {
+    const v = CAM.visibleTiles(D.cam);
+    const a = D.world.animals.find(a => a.alive && a.x > v.x0 + 10 && a.x < v.x1 - 10 && a.y > v.y0 + 10 && a.y < v.y1 - 10);
+    check(a, 'no animal in view');
+    const p = tileCenter(a.x, a.y), tt = document.querySelector('#tooltip');
+    ptr('pointermove', p.x, p.y, { buttons: 0 });
+    check(getComputedStyle(tt).display !== 'none', 'tooltip not shown over an animal before the drag');
+    ptr('pointerdown', p.x, p.y);
+    ptr('pointermove', p.x + scr(20), p.y);
+    await frames(1);
+    const hidden = getComputedStyle(tt).display === 'none', cls = cv.classList.contains('dragging');
+    ptr('pointerup', p.x + scr(20), p.y);
+    check(hidden, 'tooltip visible mid-drag');
+    check(cls, 'canvas lacks the dragging class mid-drag');
+    check(!cv.classList.contains('dragging'), 'dragging class left after release');
+  });
+  add('pointer', 'touch tap releases, touch drag pans', async () => {
+    await tapReleases({ pt: 'touch', id: 11 });
+    D.resetCamera();
+    await dragPans({ pt: 'touch', id: 11 });
+  });
+  add('pointer', 'pinch zooms', async () => {
+    const o1 = { pt: 'touch', id: 11 }, o2 = { pt: 'touch', id: 12, primary: false };
+    ptr('pointerdown', 430, 300, o1); ptr('pointerdown', 430 + scr(100), 300, o2);
+    ptr('pointermove', 430 + scr(160), 300, o2);
+    const zi = D.cam.zi;
+    ptr('pointerup', 430 + scr(160), 300, o2); ptr('pointerup', 430, 300, o1);
+    check(zi === 2, 'zi after pinch-out ' + zi);
+  });
+
   // ---------- runner ----------
   window.uiCheck = async group => {
     await setup();
