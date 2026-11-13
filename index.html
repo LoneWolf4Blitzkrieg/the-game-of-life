@@ -190,6 +190,23 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 #parade{width:100%;height:auto;aspect-ratio:320/48;border:3px solid var(--edge);background:#2c4a2a;display:block;margin:0 auto 14px}
 .choices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
 .choice{padding:14px;text-align:left;cursor:pointer}
+.choice.wide{grid-column:1/-1}
+.choice .best{font-family:var(--px);font-size:7px;color:var(--teal);margin-top:8px}
+#cards{position:absolute;top:40px;left:8px;z-index:5;display:flex;flex-direction:column;gap:6px;width:min(330px,calc(100% - 16px))}
+.pop{background:rgba(10,12,30,.96);border:2px solid var(--gold);box-shadow:inset 1px 1px 0 var(--hi),0 3px 0 #000;padding:8px 10px;font-size:18px;position:relative}
+.pop h3{font-family:var(--px);font-size:8px;line-height:1.6;color:var(--gold);margin:0 0 6px;padding-right:18px}
+.pop p{margin:4px 0}
+.pop .opts{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.pop .btn{font-size:8px;padding:7px 8px}
+.pop .x{position:absolute;right:4px;top:2px;cursor:pointer;color:var(--muted);background:none;border:0;font-size:18px}
+.pop .meterline{height:8px;background:#000;border:1px solid #333a70;margin-top:6px}
+.pop .meterline i{display:block;height:100%;background:var(--teal)}
+.pop .good{color:var(--green)} .pop .bad{color:var(--red)}
+.grade{font-family:var(--px);font-size:9px;padding:3px 5px;border:2px solid var(--edge);background:#000;color:var(--gold)}
+.rate-parts{display:grid;grid-template-columns:1fr auto;gap:2px 12px;text-align:left;font-size:19px;margin:10px auto;max-width:360px}
+.rate-parts b{font-weight:normal;color:var(--gold)}
+.big-score{font-family:var(--px);font-size:clamp(22px,6vw,40px);color:#fff;text-shadow:3px 3px 0 #e0457b;margin:8px 0}
+.share-box{width:100%;min-height:110px;background:#000;color:var(--text);border:2px solid var(--edge);font:16px/1.2 var(--tx);padding:6px;resize:none}
 .choice .btn{width:100%;font-size:10px;padding:12px}
 .choice p{font-size:18px;color:var(--muted);margin:8px 0 0}
 .how{text-align:left;font-size:19px;color:#cfd2f5}
@@ -246,8 +263,9 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         </div>
         <canvas id="minimap" width="160" height="100" aria-label="Minimap: click or drag to move the view"></canvas>
         <div id="pausedTag">PAUSED</div>
+        <div id="cards" aria-live="polite"></div>
         <div id="tooltip"></div>
-        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div><button class="btn" id="btnFollow" title="Keep the camera on this animal (F)" aria-pressed="false">FOLLOW</button></div>
+        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div><button class="btn" id="btnFollow" title="Keep the camera on this animal (F)" aria-pressed="false">FOLLOW</button> <button class="btn" id="btnName" title="Give this animal a family name">NAME</button></div>
         <div id="toast" role="status"></div>
       </div>
       <div class="statusbar">
@@ -277,11 +295,14 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         <div class="legend" id="legend"></div>
         <div class="row" style="margin-top:10px"><label>Biodiversity (Shannon H)</label><b id="bioVal" class="px" style="font-size:9px;color:var(--teal)">0.00</b></div>
         <div class="meter"><i id="bioBar" style="width:0%"></i></div>
+        <div class="row" style="margin-top:10px" title="0–1000: diversity, species alive, stability over the last year, few releases, and time survived"><label>Park rating</label><span><b id="rateVal" class="px" style="font-size:9px;color:var(--gold)">0</b> <span class="grade" id="rateGrade">D</span></span></div>
+        <div class="row"><label>Predictions <span id="predStreak" style="color:var(--teal)">streak 0 · best 0</span></label><button class="btn" id="btnPredict" title="Guess what happens next year (P)">PREDICT</button></div>
       </div>
       <div class="panel">
         <h2>ENVIRONMENT</h2>
         <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100" autocomplete="off"></div>
         <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked autocomplete="off"></div>
+        <div class="row"><label for="autoPredict">Prediction prompts</label><input type="checkbox" id="autoPredict" checked autocomplete="off"></div>
         <div class="row"><label>Average grass</label><span class="bar" style="width:150px"><i id="grassBar" style="width:50%;background:#6cbf4a"></i></span></div>
       </div>
     </aside>
@@ -349,6 +370,11 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         <button class="btn" data-preset="empty">◇ EMPTY LAND</button>
         <p>Start from bare grassland and build the food web yourself, one couple at a time.</p>
       </div>
+      <div class="panel choice wide" data-preset="daily">
+        <button class="btn gold" data-preset="daily"><span class="sym">☀</span> DAILY SAVANNA · <span id="dailyDate"></span></button>
+        <p>Everyone gets the same savanna today. Keep it thriving for 5 years, get your Park Rating, and share your score. A new map every day.</p>
+        <div class="best" id="dailyBest"></div>
+      </div>
     </div>
     <ul class="how">
       <li><b>Each pixel-creature is one animal</b> that eats, flees, hunts and searches for a mate on its own.</li>
@@ -357,6 +383,20 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
     </ul>
     <div class="blink">PICK A WORLD TO BEGIN</div>
     <button class="btn" id="btnBack" style="margin-top:12px;display:none">◀ BACK TO CURRENT WORLD (ESC)</button>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="overlay" id="resultsScreen" role="dialog" aria-modal="true" aria-labelledby="resH">
+  <div class="dialog panel" style="padding:18px;max-width:560px">
+    <h2 id="resH" style="justify-content:center">PARK REPORT</h2>
+    <div id="resBody"></div>
+    <textarea class="share-box" id="shareText" readonly aria-label="Shareable result"></textarea>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px">
+      <button class="btn gold" id="btnShare">COPY RESULT</button>
+      <button class="btn" id="btnKeep">KEEP PLAYING</button>
+      <button class="btn" id="btnResNew">NEW WORLD</button>
+    </div>
   </div>
 </div>
 
@@ -371,6 +411,8 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>WHEEL / Z X</kbd><span>Zoom in / out (or the − + ALL buttons on the map)</span>
       <kbd>DRAG / W A S D</kbd><span>Move around the map (Shift = faster)</span>
       <kbd>F</kbd><span>Follow the animal you are tracking</span>
+      <kbd>P</kbd><span>Predict: guess whether a species will rise or fall over the next year</span>
+      <kbd>NAME</kbd><span>Name a couple when you release it, or press NAME on a tracked animal. Babies keep the family name.</span>
       <kbd>MINIMAP</kbd><span>Click or drag the small map in the corner to jump there</span>
       <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
       <kbd>SPACE</kbd><span>Pause / resume</span>
@@ -553,7 +595,7 @@ const GOL = (() => {
       preg: 0, cd: 0, think: (r() * 3) | 0, mode: S.isPrey ? 'graze' : 'rest', tgt: null,
       face: r() < 0.5 ? 1 : -1, acc: r(), atk: 0, alert: 0, hx: 1, hy: 0,
       life: S.life[0] + r() * (S.life[1] - S.life[0]), mom: null, injected: false,
-      cause: null, by: -1, gen: 0, chase: 0,
+      cause: null, by: -1, gen: 0, chase: 0, fam: '', sireFam: '', named: false,
     };
     newHeading(a, r);
     w.occ[y * W + x] = a;
@@ -776,6 +818,7 @@ const GOL = (() => {
     if (fem.preg > 0 || fem.cd > 0 || mal.cd > 0 || fem.age < S.mature || mal.age < S.mature) return;
     if (crowd(w, fem, S.crowdR) > S.crowdMax) { fem.cd = 20; mal.cd = 12; a.tgt = b.tgt = null; return; }
     fem.preg = S.gestation; mal.cd = 12;
+    fem.sireFam = mal.fam;   // family name (UI only) passes to the young from either parent
     a.mode = b.mode = S.isPrey ? 'graze' : 'rest'; a.tgt = b.tgt = null;
     emit(w, { t: 'mate', sp: a.sp, x: fem.x, y: fem.y });
   }
@@ -791,12 +834,12 @@ const GOL = (() => {
       const c = findFreeNear(w, mom.x, mom.y, 2);
       if (!c) break;
       const kid = makeAnimal(w, mom.sp, r() < 0.5, c.x, c.y, 0, 0.5);
-      kid.mom = mom; kid.gen = mom.gen + 1; kid.face = mom.face;
+      kid.mom = mom; kid.gen = mom.gen + 1; kid.face = mom.face; kid.fam = mom.fam || mom.sireFam;
       mom.energy -= S.maxE * S.birthCost;
       born++;
     }
     mom.cd = S.cooldown;
-    if (born) { w.births[mom.sp] += born; emit(w, { t: 'birth', sp: mom.sp, x: mom.x, y: mom.y, n: born }); }
+    if (born) { w.births[mom.sp] += born; emit(w, { t: 'birth', sp: mom.sp, x: mom.x, y: mom.y, n: born, fam: mom.fam || mom.sireFam }); }
   }
 
   // ---------- decision making ----------
@@ -1363,6 +1406,9 @@ let chartRange = 180;
 const hiddenSeries = new Set();
 let journalUnread = 0, notesShown = new Set(), objDone = {}, goalTrack = {};
 let lastYearSnap = null, milestones = {}, everHadPred = false, prevSeasonLogged = '';
+let runMode = 'balanced', dailyKey = '', resultsShown = false, everHadAnimals = false;
+let pred = null, predAutoAt = -1e9, wantAutoPredict = false;
+let famCounts = new Map(), famBirths = new Map();
 
 const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
 // The camera picks the window of the world the map shows (see camera-core).
@@ -1540,6 +1586,31 @@ function render() {
   vctx.putImageData(viewImg, 0, 0);
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(viewCanvas, 0, 0, VW, VH, 0, 0, VIEW_W, VIEW_H);
+  drawNameLabels();
+}
+// Named founders get a name tag; their descendants get a small heart. Hidden at whole-world zoom.
+function drawNameLabels() {
+  if (cam.zi === 0 || !world) return;
+  const v = CAM.visibleTiles(cam), A = world.animals, tile = CELL * CAM.zoom(cam);
+  let tags = 0;
+  ctx.font = '8px "Press Start 2P", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  for (let k = 0; k < A.length; k++) {
+    const a = A[k];
+    if (!a.fam || !a.alive || a.x < v.x0 || a.x > v.x1 || a.y < v.y0 || a.y > v.y1) continue;
+    const p = CAM.tileToCanvas(cam, a.x, a.y), cx = Math.round(p.x + tile / 2);
+    if (a.named && tags < 40) {
+      tags++;
+      const w = Math.ceil(ctx.measureText(a.fam).width) + 6, y = Math.round(p.y) - 2;
+      ctx.fillStyle = 'rgba(10,12,30,.85)'; ctx.fillRect(cx - (w >> 1), y - 11, w, 11);
+      ctx.fillStyle = '#ff7ac8'; ctx.fillRect(cx - (w >> 1), y - 1, w, 1);
+      ctx.fillStyle = '#fff'; ctx.fillText(a.fam, cx, y - 1);
+    } else {
+      const s = Math.max(1, Math.round(tile / 6)), hx = cx - 2 * s, hy = Math.round(p.y) - 4 * s - 1;
+      ctx.fillStyle = '#ff7ac8';
+      for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (HEART[yy][xx] === 'x') ctx.fillRect(hx + xx * s, hy + yy * s, s, s);
+    }
+  }
 }
 
 // ---------------- particles ----------------
@@ -1676,6 +1747,10 @@ function processEvents() {
     switch (e.t) {
       case 'birth':
         if (!heavy || Math.random() < 0.3) spawn('birth', e.x, e.y);
+        if (e.fam) {
+          const nb = (famBirths.get(e.fam) || 0) + e.n; famBirths.set(e.fam, nb);
+          if (nb === e.n) { log(`♥ The <b style="color:var(--pink)">${e.fam}</b> family has ${e.n > 1 ? e.n + ' new babies' : 'a new baby'}!`, 'good'); toast(`♥ A BABY IN THE ${e.fam.toUpperCase()} FAMILY!`); spawn('heart', e.x, e.y); }
+        }
         if (e.sp >= 3) note('cubs');
         Sfx.play('birth');
         break;
@@ -1700,6 +1775,7 @@ function processEvents() {
         break;
       case 'season':
         if (e.name === 'Dry season') { log('☀ The dry season begins. Grass growth slows.', ''); note('dry'); }
+        if ((e.name === 'Dry season' || e.name === 'Wet season') && world.tick > YEAR / 2 && world.tick - predAutoAt > YEAR * 2) wantAutoPredict = true;
         else if (e.name === 'Wet season') { log('☂ The rains arrive. Grass grows fast again.', ''); if (world.tick > YEAR / 2) note('wet'); }
         break;
       case 'year': yearSummary(e.year); break;
@@ -1831,6 +1907,7 @@ function updateSidebar() {
   const H_ = GOL.shannon(c);
   $('#bioVal').textContent = H_.toFixed(2);
   $('#bioBar').style.width = (H_ / Math.log(5) * 100).toFixed(0) + '%';
+  const pr = parkRating(); $('#rateVal').textContent = pr.total; $('#rateGrade').textContent = pr.grade;
   $('#grassBar').style.width = Math.round(world.avgGrass * 100) + '%';
   $('#grassBar').style.background = world.avgGrass < 0.2 ? '#b88a3a' : world.avgGrass < 0.4 ? '#a8b34a' : '#6cbf4a';
 }
@@ -1854,7 +1931,8 @@ function animalHTML(a) {
   const ef = Math.max(0, Math.min(1, a.energy / S.maxE));
   const col = ENERGY_COL[Math.min(7, (ef * 8) | 0)];
   const stage = a.age < S.mature ? 'Young' : a.age > a.life * 0.85 ? 'Elderly' : 'Adult';
-  return head + `<div class="tt-role">${S.role}${a.injected ? ' · released by you' : a.gen ? ' · generation ' + a.gen : ''}</div>
+  const famLine = a.fam ? `<div style="color:var(--pink)">♥ ${a.named ? a.fam + ', founder of the ' + a.fam + ' family' : 'The ' + a.fam + ' family'}</div>` : '';
+  return head + famLine + `<div class="tt-role">${S.role}${a.injected ? ' · released by you' : a.gen ? ' · generation ' + a.gen : ''}</div>
     <div>Age: ${fmtAge(a.age)} (${stage})</div>
     <div>Energy: <span class="bar"><i style="width:${(ef * 100).toFixed(0)}%;background:${col}"></i></span>${(ef * 100).toFixed(0)}%</div>
     <div>Doing: <b>${MODE_TEXT[a.mode] || a.mode}</b></div>
@@ -1898,6 +1976,7 @@ function updateTracker() {
   b.textContent = follow ? 'FOLLOWING' : 'FOLLOW';
   b.classList.toggle('on', follow);
   b.setAttribute('aria-pressed', follow ? 'true' : 'false');
+  $('#btnName').style.display = selected.alive && !selected.fam ? 'inline-block' : 'none';
 }
 // Follow the tracked animal with the camera (only while it is alive). Turning it on centres at once.
 function setFollow(on) {
@@ -2088,10 +2167,11 @@ function actAt(c, shift) {
   hover = c;
   if (tool >= 0) {
     const pairs = shift ? 3 : 1;
-    let ok = 0;
+    let ok = 0, first = null;
     for (let k = 0; k < pairs; k++) {
-      const ox = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8), oy = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8);
-      if (GOL.inject(world, tool, c.x + ox, c.y + oy)) ok++;
+      const ox = k === 0 ? 0 : Math.round((world.rand() - 0.5) * 8), oy = k === 0 ? 0 : Math.round((world.rand() - 0.5) * 8);
+      const pair = GOL.inject(world, tool, c.x + ox, c.y + oy);
+      if (pair) { ok++; if (!first) first = pair; }
     }
     const S = SPECIES[tool];
     if (ok) {
@@ -2104,6 +2184,7 @@ function actAt(c, shift) {
       note('inject');
       processEvents();
       updateSidebar();
+      openNamePicker(first);
     } else { toast("NO ROOM HERE. TRY OPEN GRASSLAND"); Sfx.play('click'); }
   } else {
     const a = animalAt(c.x, c.y);
@@ -2135,6 +2216,7 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const titleOpen = $('#titleScreen').classList.contains('show'), helpOpen = $('#helpScreen').classList.contains('show');
   if (helpOpen) { if (e.key === 'Escape' || e.key === 'h' || e.key === 'H') { closeHelp(); e.preventDefault(); } return; }
+  if ($('#resultsScreen').classList.contains('show')) { if (e.key === 'Escape') { closeResults(); e.preventDefault(); } return; }
   if (titleOpen) { if (e.key === 'Escape' && world && titleCanClose) { closeTitle(); e.preventDefault(); } return; }
   const k = e.key;
   if (k === ' ' && e.target !== document.body && e.target !== canvas && e.target.matches(':focus-visible')) return; // let Space press focused controls
@@ -2150,6 +2232,7 @@ document.addEventListener('keydown', e => {
   else if (k === '.') { setRunning(false); GOL.step(world); }
   else if (k.length === 1 && 'wasdWASD'.includes(k)) { heldPan.add(k.toLowerCase()); panFast = e.shiftKey; }
   else if (k === 'f' || k === 'F') toggleFollow();
+  else if (k === 'p' || k === 'P') { if (pred) endPredict(true); else openPredict(false); }
   else if (k === 'z' || k === 'Z') zoomTo(cam.zi + 1);
   else if (k === 'x' || k === 'X') zoomTo(cam.zi - 1);
 });
@@ -2189,10 +2272,11 @@ function drawParade(dt) {
 }
 let wasRunning = false;
 function setInert() {
-  const open = $('#titleScreen').classList.contains('show') || $('#helpScreen').classList.contains('show');
+  const open = $('#titleScreen').classList.contains('show') || $('#helpScreen').classList.contains('show') || $('#resultsScreen').classList.contains('show');
   $('#app').inert = open;
 }
 function openTitle() {
+  refreshDailyChoice();
   titleCanClose = !!world && !demo;
   wasRunning = running;
   $('#btnBack').style.display = titleCanClose ? 'inline-block' : 'none';
@@ -2212,7 +2296,12 @@ document.querySelectorAll('[data-preset]').forEach(el => el.addEventListener('cl
 }));
 
 function newWorld(preset, isDemo) {
-  const seed = (Math.random() * 1e9) | 0;
+  runMode = preset;
+  let seed = (Math.random() * 1e9) | 0;
+  if (preset === 'daily') {
+    dailyKey = todayKey(); seed = dailySeed(dailyKey); preset = 'balanced';
+    $('#rain').value = 100; $('#seasons').checked = true;   // everyone plays the same conditions
+  }
   world = GOL.createWorld(seed, preset);
   demo = !!isDemo;
   world.rain = $('#rain').value / 100;
@@ -2221,6 +2310,8 @@ function newWorld(preset, isDemo) {
   resetCamera();
   particles = []; selected = null; follow = false; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
+  resultsShown = false; everHadAnimals = false; famCounts = new Map(); famBirths = new Map();
+  if (pred) endPredict(true); wantAutoPredict = false; predAutoAt = -1e9; closeCard('nameCard');
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
   toastQ.length = 0; clearTimeout(toastTimer); toastBusy = false; $('#toast').classList.remove('show');
@@ -2230,11 +2321,238 @@ function newWorld(preset, isDemo) {
   updateTracker();
   if (!isDemo) {
     note('welcome');
-    if (preset === 'empty') log('The land is empty. Pick an animal on the right and click the map to release a couple. Grazers first! Predators need something to eat.', 'good');
+    if (runMode === 'daily') log(`☀ Daily Savanna for ${dailyKey}. Everyone has the same map today. Keep all five species thriving for 5 years to earn your Park Rating.`, 'gold');
+    else if (preset === 'empty') log('The land is empty. Pick an animal on the right and click the map to release a couple. Grazers first! Predators need something to eat.', 'good');
     else log('A balanced savanna: buffalo, gazelles and hares graze while lions and cheetahs hunt.', 'good');
   }
   updateSidebar(); updateObjectives(); drawCharts();
 }
+
+// ---------------- family names ----------------
+const NAMES = ['Sunny', 'Biscuit', 'Zuri', 'Pip', 'Mango', 'Pebble', 'Kiki', 'Juno', 'Ziggy', 'Coco', 'Bean', 'Maple',
+  'Tumble', 'Rosie', 'Echo', 'Bramble', 'Olive', 'Dot', 'Waffles', 'Pickle', 'Nova', 'Rio', 'Sage', 'Toffee', 'Breezy',
+  'Bingo', 'Lulu', 'Hopper', 'Sprout', 'Clover', 'Peanut', 'Daisy', 'Zola', 'Kito', 'Amani', 'Jabari', 'Imani', 'Nuru',
+  'Pumpkin', 'Button', 'Marble', 'Comet', 'Honey', 'Ginger', 'Muffin', 'Sparky', 'Tiki', 'Bubbles'];
+let nameTimer = 0;
+function openNamePicker(group) {
+  closeCard('nameCard');
+  if (!group || !group.length || demo) return;
+  const live = new Set(); for (const a of world.animals) if (a.fam) live.add(a.fam);
+  const pool = NAMES.filter(n => !live.has(n));
+  const pick = [];
+  while (pick.length < 6 && pool.length) pick.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
+  const S = SPECIES[group[0].sp], what = group.length > 1 ? `${S.name.toLowerCase()} couple` : S.name.toLowerCase();
+  const el = document.createElement('div');
+  el.className = 'pop'; el.id = 'nameCard';
+  el.innerHTML = `<button class="x" aria-label="Close">✕</button><h3>NAME YOUR ${what.toUpperCase()}?</h3>
+    <p>Their babies will keep the family name.</p>
+    <div class="opts">${pick.map(n => `<button class="btn" data-name="${n}">${n.toUpperCase()}</button>`).join('')}
+    <button class="btn" data-more="1" title="Other names">🎲</button></div>`;
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.classList.contains('x')) return closeCard('nameCard');
+    if (b.dataset.more) return openNamePicker(group);
+    const name = b.dataset.name; if (!name) return;
+    for (const a of group) if (a.alive) { a.fam = name; a.named = true; }
+    famBirths.set(name, 0);
+    log(`♥ You named the ${what} the <b style="color:var(--pink)">${name}</b> family. Watch for little hearts over their babies.`, 'good');
+    toast(`♥ MEET THE ${name.toUpperCase()} FAMILY!`);
+    Sfx.play('goal');
+    closeCard('nameCard'); updateTracker();
+  });
+  $('#cards').append(el);
+  clearTimeout(nameTimer);
+  nameTimer = setTimeout(() => closeCard('nameCard'), 15000);
+  el.addEventListener('pointerdown', () => clearTimeout(nameTimer));
+}
+function closeCard(id) { const el = document.getElementById(id); if (el) el.remove(); }
+$('#btnName').addEventListener('click', () => { if (selected && selected.alive) openNamePicker([selected]); });
+// Count living members of each named family; note new arrivals, milestones and family lines ending.
+function updateFamilies() {
+  const now = new Map();
+  for (const a of world.animals) if (a.fam && a.alive) now.set(a.fam, (now.get(a.fam) || 0) + 1);
+  for (const [f, n] of famCounts) if (n > 0 && !now.get(f))
+    log(`The last of the <b style="color:var(--pink)">${f}</b> family has gone. Every family line ends one day, but the species carries on through others.`, '');
+  for (const [f, n] of now) for (const m of [10, 25, 50, 100]) if (n >= m && (famCounts.get(f) || 0) < m)
+    log(`♥ The <b style="color:var(--pink)">${f}</b> family has grown to ${m}!`, 'good');
+  famCounts = now;
+}
+
+// ---------------- park rating ----------------
+// 0–1000: diversity 400, species alive 200, stability over the last year 200, few releases 100, time 100.
+function parkRating() {
+  const c = world.counts, alive = c.filter(v => v > 0).length;
+  const div = GOL.shannon(c) / Math.log(5);
+  const h = world.hist, n = h.len, span = Math.min(90, n);
+  let cv = 0, cvN = 0;
+  if (span >= 10) for (let sp = 0; sp < 5; sp++) {
+    let m = 0, q = 0;
+    for (let k = n - span; k < n; k++) { const v = h.data[sp][k % GOL.HIST_CAP]; m += v; q += v * v; }
+    m /= span; if (m < 1) continue;
+    cv += Math.sqrt(Math.max(0, q / span - m * m)) / m; cvN++;
+  }
+  const stab = cvN ? Math.max(0, 1 - (cv / cvN) / 0.6) : 0;
+  const couples = sumArr(world.injected);
+  const parts = {
+    Diversity: Math.round(400 * div),
+    'Species alive': Math.round(200 * alive / 5),
+    Stability: Math.round(200 * stab),
+    'Light touch': Math.round(100 / (1 + couples / 12)),
+    'Time survived': Math.round(100 * Math.min(1, world.tick / (YEAR * 5))),
+  };
+  const total = Object.values(parts).reduce((a, b) => a + b, 0);
+  const grade = total >= 850 ? 'S' : total >= 750 ? 'A' : total >= 600 ? 'B' : total >= 450 ? 'C' : 'D';
+  return { total, grade, parts, couples, alive };
+}
+
+// ---------------- daily savanna ----------------
+function todayKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function dailySeed(key) { let h = 2166136261; for (const ch of 'gol-daily-' + key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) % 1e9; }
+function bestKey() { return runMode === 'daily' ? 'best.daily.' + dailyKey : 'best.' + runMode; }
+function refreshDailyChoice() {
+  const k = todayKey();
+  $('#dailyDate').textContent = k;
+  const b = storage.get('best.daily.' + k, null);
+  $('#dailyBest').textContent = b ? `TODAY'S BEST: ${b.total} (${b.grade})` : 'NOT PLAYED YET TODAY';
+}
+
+// ---------------- results ----------------
+function showResults(reason) {
+  resultsShown = true;
+  const r = parkRating(), key = bestKey(), prev = storage.get(key, null);
+  const isBest = !prev || r.total > prev.total;
+  if (isBest) storage.set(key, { total: r.total, grade: r.grade });
+  const title = reason === 'gone' ? 'EVERY ANIMAL IS GONE' : runMode === 'daily' ? `DAILY SAVANNA · ${dailyKey}` : 'FIVE YEARS OF YOUR PARK';
+  $('#resBody').innerHTML = `<div class="sub" style="margin:0">${title}</div>
+    <div class="big-score">${r.total} <span class="grade" style="font-size:14px">${r.grade}</span></div>
+    <div style="color:${isBest ? 'var(--green)' : 'var(--muted)'}">${isBest ? (prev ? `★ New personal best! (was ${prev.total})` : '★ First score saved!') : `Personal best: ${prev.total} (${prev.grade})`}</div>
+    <div class="rate-parts">${Object.entries(r.parts).map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join('')}</div>
+    <p class="hint" style="text-align:center">${reason === 'gone' ? 'An empty savanna can be refilled: release couples and try again.' : runMode === 'daily' ? 'Come back tomorrow for a new savanna. You can keep playing this one.' : 'Your park keeps going if you want to keep watching.'}</p>`;
+  const S = SPECIES;
+  $('#shareText').value = `THE GAME OF LIFE · ${runMode === 'daily' ? 'Daily Savanna ' + dailyKey : runMode === 'empty' ? 'Empty Land' : 'Balanced Savanna'}\n` +
+    `Park Rating ${r.total} (${r.grade}) after ${Math.floor(world.tick / YEAR)} year${Math.floor(world.tick / YEAR) === 1 ? '' : 's'}\n` +
+    S.map((s, i) => `${s.plural} ${world.counts[i]}`).join(' · ') + '\n' +
+    `${r.alive}/5 species · ${r.couples} couple${r.couples === 1 ? '' : 's'} released\n` + location.origin + location.pathname;
+  wasRunningRes = running; setRunning(false);
+  $('#resultsScreen').classList.add('show'); setInert();
+  $('#btnShare').textContent = 'COPY RESULT';
+  $('#btnKeep').focus();
+  Sfx.play('goal');
+  log(`📋 Park report: rating <b>${r.total} (${r.grade})</b>.`, 'gold');
+}
+let wasRunningRes = false;
+function closeResults() { $('#resultsScreen').classList.remove('show'); setInert(); setRunning(true); canvas.focus({ preventScroll: true }); }
+$('#btnKeep').onclick = closeResults;
+$('#btnResNew').onclick = () => { $('#resultsScreen').classList.remove('show'); openTitle(); };
+$('#btnShare').onclick = async () => {
+  const t = $('#shareText');
+  try { await navigator.clipboard.writeText(t.value); }
+  catch (e) { t.focus(); t.select(); try { document.execCommand('copy'); } catch (e2) { /* select for manual copy */ } }
+  $('#btnShare').textContent = 'COPIED!';
+};
+function checkRunEnd() {
+  if (demo || resultsShown || !world) return;
+  const tot = sumArr(world.counts);
+  if (tot > 0) everHadAnimals = true;
+  if (world.tick >= YEAR * 5) showResults('years');
+  else if (everHadAnimals && tot === 0 && world.tick > 30) showResults('gone');
+}
+
+// ---------------- predict-then-watch ----------------
+function predStats() { return storage.get('predict', { streak: 0, best: 0 }); }
+function showPredStats() { const p = predStats(); $('#predStreak').textContent = `streak ${p.streak} · best ${p.best}`; }
+function cardsBlocked() { return ['titleScreen', 'helpScreen', 'resultsScreen'].some(id => document.getElementById(id).classList.contains('show')); }
+function openPredict(auto) {
+  if (!world || demo || pred || cardsBlocked()) return;
+  const cands = [0, 1, 2, 3, 4].filter(i => world.counts[i] >= 6);
+  if (!cands.length) { if (!auto) toast('NOT ENOUGH ANIMALS TO PREDICT YET'); return; }
+  const sp = cands[(Math.random() * cands.length) | 0], S = SPECIES[sp];
+  pred = { sp, phase: 'ask', wasRunning: running, speed: speedIdx };
+  setRunning(false);
+  predAutoAt = world.tick;
+  const si = GOL.seasonInfo(world);
+  const clue = S.isPrey ? `Clue: it's the ${si.name.toLowerCase()}, and there are ${world.counts[3] + world.counts[4]} predators right now. Check the charts!`
+    : `Clue: there are ${world.counts[0] + world.counts[1] + world.counts[2]} prey animals right now. Is that number rising or falling in the chart?`;
+  const el = document.createElement('div');
+  el.className = 'pop'; el.id = 'predCard';
+  el.innerHTML = `<button class="x" aria-label="Not now">✕</button><h3>PREDICT! ONE YEAR FROM NOW…</h3>
+    <p>Will there be <b>more</b>, <b>about the same</b>, or <b>fewer</b> <b style="color:${S.color}">${S.plural.toLowerCase()}</b> than now (${world.counts[sp]})?</p>
+    <p style="color:var(--muted)">${clue}</p>
+    <div class="opts"><button class="btn" data-c="more">▲ MORE</button><button class="btn" data-c="same">= SAME</button><button class="btn" data-c="fewer">▼ FEWER</button></div>`;
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.classList.contains('x')) return endPredict(true);
+    if (b.dataset.c && pred && pred.phase === 'ask') startWatch(b.dataset.c);
+    if (b.dataset.stop) endPredict(true);
+    if (b.dataset.done) endPredict(false);
+  });
+  $('#cards').prepend(el);
+  el.querySelector('[data-c]').focus({ preventScroll: true });
+  Sfx.play('select');
+}
+function startWatch(choice) {
+  Object.assign(pred, { phase: 'watch', choice, start: world.counts[pred.sp], t0: world.tick, end: world.tick + YEAR,
+    prey0: world.counts[0] + world.counts[1] + world.counts[2], predN0: world.counts[3] + world.counts[4], grass0: world.avgGrass });
+  setSpeed(SPEEDS.length - 1); setRunning(true);
+  renderWatch();
+}
+function renderWatch() {
+  const el = $('#predCard'); if (!el || !pred) return;
+  const S = SPECIES[pred.sp], f = Math.min(1, (world.tick - pred.t0) / YEAR);
+  el.innerHTML = `<h3>WATCHING THE ${S.plural.toUpperCase()}… (16×)</h3>
+    <p>You said <b>${pred.choice.toUpperCase()}</b>. Now: ${world.counts[pred.sp]} (started at ${pred.start})</p>
+    <div class="meterline"><i style="width:${(f * 100).toFixed(0)}%"></i></div>
+    <div class="opts"><button class="btn" data-stop="1">STOP WATCHING</button></div>`;
+}
+function resolvePredict() {
+  const sp = pred.sp, S = SPECIES[sp], end = world.counts[sp], start = pred.start;
+  const ch = (end - start) / Math.max(1, start);
+  const outcome = ch > 0.15 ? 'more' : ch < -0.15 ? 'fewer' : 'same';
+  const right = outcome === pred.choice;
+  const st = predStats();
+  st.streak = right ? st.streak + 1 : 0; st.best = Math.max(st.best, st.streak);
+  storage.set('predict', st); showPredStats();
+  const prey1 = world.counts[0] + world.counts[1] + world.counts[2], pred1 = world.counts[3] + world.counts[4];
+  const pct = (a, b) => { const v = Math.round((b - a) / Math.max(1, a) * 100); return (v > 0 ? '+' : '') + v + '%'; };
+  const why = [];
+  if (S.isPrey) {
+    if (pred1 > pred.predN0 * 1.15) why.push(`predators went up (${pred.predN0} → ${pred1}), so more were hunted`);
+    else if (pred1 < pred.predN0 * 0.85) why.push(`predators went down (${pred.predN0} → ${pred1}), so fewer were hunted`);
+    if (world.avgGrass < 0.15) why.push('grass ran short, so some went hungry');
+    else if (world.avgGrass > pred.grass0 + 0.1) why.push('there was more grass to eat');
+  } else {
+    if (prey1 < pred.prey0 * 0.85) why.push(`their prey went down (${pred.prey0} → ${prey1}), so hunting got harder`);
+    else if (prey1 > pred.prey0 * 1.15) why.push(`their prey went up (${pred.prey0} → ${prey1}), so there was more to eat`);
+    if (sp === 4 && world.counts[3] > 0) why.push('lions compete with them and sometimes fight them');
+  }
+  if (!why.length) why.push('births and deaths roughly balanced out over the year');
+  const el = $('#predCard');
+  const word = { more: 'MORE', same: 'ABOUT THE SAME', fewer: 'FEWER' }[outcome];
+  if (el) el.innerHTML = `<button class="x" aria-label="Close">✕</button><h3>${right ? '★ CORRECT!' : 'NOT THIS TIME'}</h3>
+    <p class="${right ? 'good' : 'bad'}">${S.plural}: ${start} → ${end} (${pct(start, end)}), that counts as <b>${word}</b>.</p>
+    <p>Why? ${why.join('; ').replace(/^./, c => c.toUpperCase())}.</p>
+    <p style="color:var(--muted)">Streak: ${st.streak} · best ${st.best}</p>
+    <div class="opts"><button class="btn" data-done="1">OK</button></div>`;
+  log(`🔮 Prediction: you said ${pred.choice} ${S.plural.toLowerCase()}; it was ${outcome} (${start} → ${end}). ${right ? 'Correct!' : 'Not this time.'} Why: ${why.join('; ')}.`, right ? 'good' : '');
+  if (right) Sfx.play('goal'); else Sfx.play('click');
+  setSpeed(pred.speed);
+  pred.phase = 'done';
+}
+function endPredict(cancel) {
+  if (pred) {
+    if (pred.phase === 'watch' || pred.phase === 'ask') setSpeed(pred.speed);
+    if (pred.phase === 'ask') setRunning(pred.wasRunning);
+  }
+  pred = null; closeCard('predCard'); canvas.focus({ preventScroll: true });
+}
+function updatePredict() {
+  if (!pred && wantAutoPredict && $('#autoPredict').checked && !cardsBlocked()) { wantAutoPredict = false; openPredict(true); }
+  if (!pred || pred.phase !== 'watch') return;
+  if (world.tick >= pred.end) resolvePredict(); else renderWatch();
+}
+$('#btnPredict').onclick = () => openPredict(false);
+$('#autoPredict').checked = storage.get('autoPredict', true);
+$('#autoPredict').onchange = e => storage.set('autoPredict', e.target.checked);
 
 // ---------------- minimap ----------------
 // The whole world at 2 x 2 tiles per minimap px. The base layer (terrain + animal dots) is rebuilt
@@ -2332,7 +2650,8 @@ function frame(now) {
   const titleOpen = $('#titleScreen').classList.contains('show');
   if (titleOpen) drawParade(dt);
   const helpOpen = $('#helpScreen').classList.contains('show');
-  const go = !helpOpen && (running || (titleOpen && demo));
+  const resOpen = $('#resultsScreen').classList.contains('show');
+  const go = !helpOpen && !resOpen && (running || (titleOpen && demo));
   if (world && go) {
     tickAcc += dt * BASE_TPS * (titleOpen ? 1 : SPEEDS[speedIdx]);
     const t0 = performance.now();
@@ -2355,7 +2674,7 @@ function frame(now) {
       lastUi = now;
       updateSidebar(); drawCharts();
       updateMinimapVisibility(); refreshMinimapBase();
-      if (!demo) { updateObjectives(); checkContextNotes(); }
+      if (!demo) { updateObjectives(); checkContextNotes(); updateFamilies(); updatePredict(); checkRunEnd(); }
       if (selected) { updateTracker(); if (!selected.alive && now - (selected._seenDead || (selected._seenDead = now)) > 6000) { selected = null; updateTracker(); } }
       updateTooltip();
     }
@@ -2368,10 +2687,12 @@ if (DEBUG) window.golDebug = {
   get world() { return world; }, get hover() { return hover; }, get selected() { return selected; },
   get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
   setSelected(a) { selected = a; updateTracker(); }, setFollow, pickRadius,
+  get pred() { return pred; }, parkRating, openPredict, openNamePicker, showResults,
 };
 
 buildSidebar();
 buildObjectives();
+refreshDailyChoice(); showPredStats();
 setView(0); setSpeed(0); setSound(Sfx.on); setTool(-1);
 newWorld('balanced', true);
 setRunning(false);
