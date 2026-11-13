@@ -1448,8 +1448,8 @@ function note(id) {
 // ---------------- objectives ----------------
 const OBJECTIVES = [
   { id: 'couple', t: 'Matchmaker', d: 'Release your first ♂+♀ couple.', p: () => sumArr(world.injected) >= 1, prog: () => `${Math.min(1, sumArr(world.injected))}/1` },
-  { id: 'boom', t: 'Baby Boom', d: 'Witness 500 births.', p: () => sumArr(world.births) >= 500, prog: () => `${Math.min(500, sumArr(world.births))}/500` },
-  { id: 'chain', t: 'Circle of Life', d: 'Predators make 100 successful hunts.', p: () => sumArr(world.kills) >= 100, prog: () => `${Math.min(100, sumArr(world.kills))}/100` },
+  { id: 'boom', t: 'Baby Boom', d: 'Witness 3,000 births.', p: () => sumArr(world.births) >= 3000, prog: () => `${Math.min(3000, sumArr(world.births))}/3000` },
+  { id: 'chain', t: 'Circle of Life', d: 'Predators make 1,000 successful hunts.', p: () => sumArr(world.kills) >= 1000, prog: () => `${Math.min(1000, sumArr(world.kills))}/1000` },
   { id: 'rival', t: 'Rivalry', d: 'Witness 10 fights between lions and cheetahs.', p: () => world.fights >= 10, prog: () => `${Math.min(10, world.fights)}/10` },
   { id: 'coexist', t: 'Coexistence', d: 'Keep all 5 species alive for 3 years in a row.', p: () => coexistDays() >= YEAR * 3, prog: () => `${(coexistDays() / YEAR).toFixed(1)}/3 yrs` },
   { id: 'diverse', t: 'Thriving Ecosystem', d: 'Reach a biodiversity index (Shannon H) of 1.30.', p: () => GOL.shannon(world.counts) >= 1.3, prog: () => `${GOL.shannon(world.counts).toFixed(2)}/1.30` },
