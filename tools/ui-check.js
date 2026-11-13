@@ -404,6 +404,81 @@
     check(D.cam.zi === 0 && D.pickRadius() === 2, 'radius at whole world ' + D.pickRadius());
   });
 
+  // ---------- group: hardening (final-review fixes) ----------
+  add('hardening', 'following keeps the keyboard cursor in view', async () => {
+    await trackLion();
+    key('f');
+    check(D.follow, 'F did not start following');
+    keyboardCursor();
+    for (let i = 0; i < 20; i++) key('ArrowRight', { shift: true, target: cv });
+    await frames(2);
+    const h = D.hover, want = h && CAM.pullInside(D.cam, h.x, h.y);
+    check(h && same(h, want), `cursor ${JSON.stringify(h)} not fully visible (would be ${JSON.stringify(want)})`);
+  });
+  add('hardening', 'pinch, first finger lifts: the other finger pans', async () => {
+    const o1 = { pt: 'touch', id: 11 }, o2 = { pt: 'touch', id: 12, primary: false };
+    ptr('pointerdown', 400, 300, o1); ptr('pointerdown', 400 + scr(100), 300, o2);
+    ptr('pointermove', 400 + scr(160), 300, o2);
+    ptr('pointerup', 400, 300, o1);
+    const x0 = CAM.srcRect(D.cam).x;
+    for (let i = 1; i <= 4; i++) { ptr('pointermove', 400 + scr(160 + 10 * i), 300, o2); await frames(1); }
+    ptr('pointerup', 400 + scr(200), 300, o2);
+    check(CAM.srcRect(D.cam).x < x0, `window x ${x0} -> ${CAM.srcRect(D.cam).x}`);
+  });
+  add('hardening', 'a pan after a pinch stops following', async () => {
+    await trackLion();
+    key('f');
+    const o1 = { pt: 'touch', id: 11 }, o2 = { pt: 'touch', id: 12, primary: false };
+    ptr('pointerdown', 400, 300, o1); ptr('pointerdown', 400 + scr(100), 300, o2);
+    ptr('pointerup', 400 + scr(100), 300, o2);
+    for (let i = 1; i <= 4; i++) { ptr('pointermove', 400 + scr(15 * i), 300, o1); await frames(1); }
+    const f = D.follow;
+    ptr('pointerup', 400 + scr(60), 300, o1);
+    check(f === false, 'still following after a one-finger pan');
+  });
+  add('hardening', 'a lost release does not leave the map sliding', async () => {
+    key('3');
+    ptr('pointerdown', 480, 300);
+    ptr('pointermove', 480 + scr(20), 300); ptr('pointermove', 480 + scr(40), 300);
+    // the release never arrives; the mouse moves with no button held
+    const x0 = CAM.srcRect(D.cam).x;
+    ptr('pointermove', 480 + scr(140), 300, { buttons: 0 });
+    check(CAM.srcRect(D.cam).x === x0, `map slid with no button held: ${x0} -> ${CAM.srcRect(D.cam).x}`);
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected();
+    ptr('pointerdown', p.x, p.y); ptr('pointerup', p.x, p.y);
+    check(injected() === before + 1, 'next click was swallowed');
+  });
+  add('hardening', 'release far from the press is a drag, not a click', async () => {
+    key('3');
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected();
+    ptr('pointerdown', p.x, p.y); ptr('pointerup', p.x + scr(40), p.y);
+    check(injected() === before, 'a 40 px press-release acted');
+  });
+  add('hardening', 'wheel over the minimap and zoom bar zooms, not the page', async () => {
+    for (const el of [document.querySelector('#minimap'), document.querySelector('#btnZoomIn')]) {
+      D.resetCamera();
+      const r = el.getBoundingClientRect();
+      const ok = el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120, clientX: r.left + 5, clientY: r.top + 5 }));
+      check(ok === false && D.cam.zi === 2, `#${el.id}: page scroll not prevented or no zoom (zi ${D.cam.zi})`);
+    }
+  });
+  add('hardening', 'touch tap with an 8 px wobble releases at the press point', async () => {
+    key('3');
+    const t = freeGrassTile(), p = tileCenter(t.x, t.y), before = injected(), had = ids(), o = { pt: 'touch', id: 11 };
+    ptr('pointerdown', p.x, p.y, o);
+    ptr('pointermove', p.x + scr(8), p.y, o);
+    ptr('pointerup', p.x + scr(8), p.y, o);
+    check(injected() === before + 1, 'tap with 8 px wobble did not release');
+    const fresh = newAnimals(had, 2);
+    check(fresh.some(a => a.x === t.x && a.y === t.y), `not released at the press tile ${t.x},${t.y}: ${JSON.stringify(fresh.map(a => [a.x, a.y]))}`);
+  });
+  add('hardening', 'zoom buttons keep the map focused', async () => {
+    for (const id of ['#btnZoomIn', '#btnZoomOut', '#btnZoomAll']) {
+      const ok = ptr('pointerdown', 5, 5, { target: document.querySelector(id) });
+      check(ok === false, id + ' pointerdown would take focus from the map');
+    }
+  });
+
   // ---------- runner ----------
   window.uiCheck = async group => {
     await setup();

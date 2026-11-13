@@ -1985,7 +1985,7 @@ function updateZoomUI() {
 }
 // Mouse wheel / trackpad: add up the scroll distance and zoom one level per 50 px, toward the pointer.
 // Small trackpad deltas add up; the sum is dropped after 200 ms without wheel events.
-canvas.addEventListener('wheel', e => {
+$('#wrap').addEventListener('wheel', e => {   // the whole map box, so the minimap and buttons zoom too
   e.preventDefault();
   const now = performance.now();
   if (now - wheelAt > 200) wheelAcc = 0;
@@ -1997,6 +1997,7 @@ canvas.addEventListener('wheel', e => {
     wheelAcc = 0;
   }
 }, { passive: false });
+$('#zoomBar').addEventListener('pointerdown', e => e.preventDefault());   // keep the map's keyboard focus
 $('#btnZoomIn').onclick = () => zoomTo(cam.zi + 1);
 $('#btnZoomOut').onclick = () => zoomTo(cam.zi - 1);
 // ALL: whole world; pressed again, back to the zoom level from before.
@@ -2005,14 +2006,19 @@ $('#btnZoomAll').onclick = () => {
 };
 // Map pointer input. A press acts on release (left button or touch), unless it moved CAM.DRAG_PX
 // screen px or more: then it is a drag that pans the map and never acts. Two touches pinch-zoom.
-let drag = null;            // { id, button, sx, sy, lx, ly, moved, shift } for the press in progress
+let drag = null;            // { id, button, touch, sx, sy, lx, ly, moved, shift } for the press in progress
 const touches = new Map();  // pointerId -> { x, y } (client px) of touches on the map
 let pinchDist = 0;          // finger distance at the last pinch zoom step
 const touchDist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+// A finger wobbles more than a mouse, so a touch may move further and still be a tap.
+const slop = d => d.touch ? 10 : CAM.DRAG_PX;
 function endDrag() {
   drag = null; touches.clear(); pinchDist = 0;
   canvas.classList.remove('dragging');
 }
+// The release can get lost (window switch, a context menu): never leave the map stuck in a drag.
+canvas.addEventListener('lostpointercapture', e => { if (drag && e.pointerId === drag.id) endDrag(); });
+window.addEventListener('blur', () => { if (drag) endDrag(); });
 canvas.addEventListener('pointerdown', e => {
   if (e.button === 1) e.preventDefault();   // no middle-click autoscroll
   if (e.pointerType === 'touch') touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -2022,10 +2028,11 @@ canvas.addEventListener('pointerdown', e => {
     return;
   }
   if (drag) return;
-  drag = { id: e.pointerId, button: e.button, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, shift: e.shiftKey };
+  drag = { id: e.pointerId, button: e.button, touch: e.pointerType === 'touch', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, shift: e.shiftKey };
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers cannot be captured */ }
 });
 canvas.addEventListener('pointermove', e => {
+  if (drag && !drag.touch && e.buttons === 0) endDrag();   // the mouse button was released somewhere we didn't hear
   if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (drag && touches.size === 2 && pinchDist > 0) {
     if (e.pointerId === drag.id) { drag.lx = e.clientX; drag.ly = e.clientY; }   // no jump when one finger lifts
@@ -2038,13 +2045,14 @@ canvas.addEventListener('pointermove', e => {
     return;
   }
   if (drag && e.pointerId === drag.id) {
-    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) >= CAM.DRAG_PX) {
-      drag.moved = true; follow = false;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) >= slop(drag)) {
+      drag.moved = true;
       canvas.classList.add('dragging');
     }
-    if (drag.moved) {
+    if (drag.moved && (e.clientX !== drag.lx || e.clientY !== drag.ly)) {
       const k = VIEW_W / canvas.getBoundingClientRect().width;
       CAM.panBy(cam, -(e.clientX - drag.lx) * k, -(e.clientY - drag.ly) * k);
+      if (follow) setFollow(false);   // dragging the map stops following (also after a pinch)
     }
     drag.lx = e.clientX; drag.ly = e.clientY;
   }
@@ -2054,10 +2062,16 @@ canvas.addEventListener('pointermove', e => {
 canvas.addEventListener('pointerup', e => {
   touches.delete(e.pointerId);
   if (!drag || e.pointerId !== drag.id) { if (drag && touches.size < 2) pinchDist = 0; return; }
+  if (drag.moved && touches.size === 1) {   // the first finger of a pinch lifted: the other one carries on panning
+    const [[id, p]] = [...touches];
+    drag.id = id; drag.lx = p.x; drag.ly = p.y; pinchDist = 0;
+    return;
+  }
   const d = drag;
   endDrag();
-  if (!d.moved && d.button === 0) {
-    const c = cellFrom(e);
+  // A release far from the press is a drag even if no move event arrived in between.
+  if (!d.moved && d.button === 0 && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < slop(d)) {
+    const c = d.touch ? cellFromClient(d.sx, d.sy) : cellFrom(e);   // a tap acts where the finger landed
     if (c) actAt(c, d.shift || e.shiftKey);
   }
   updateTooltip();
@@ -2301,11 +2315,11 @@ function updateCamera(dt, overlay) {
     else CAM.centerOn(cam, selected.x, selected.y);
   }
   // When the view moved, keep the cursor honest: under the mouse, or (keyboard) pulled into view.
-  const r = CAM.srcRect(cam), key = r.x + ',' + r.y + ',' + cam.zi;
-  if (key === lastCamKey) return;
+  const r = CAM.srcRect(cam), key = r.x + ',' + r.y + ',' + cam.zi, changed = key !== lastCamKey;
   lastCamKey = key;
-  if (lastMouse && !(drag && drag.moved)) hover = cellFromClient(lastMouse.x, lastMouse.y);
-  else if (hover && document.activeElement === canvas) hover = CAM.pullInside(cam, hover.x, hover.y);
+  if (changed && lastMouse && !(drag && drag.moved)) hover = cellFromClient(lastMouse.x, lastMouse.y);
+  // A keyboard cursor always stays fully in view, every frame (following can undo an arrow's scroll).
+  else if (hover && document.activeElement === canvas && (changed || !lastMouse)) hover = CAM.pullInside(cam, hover.x, hover.y);
 }
 
 // ---------------- main loop ----------------
