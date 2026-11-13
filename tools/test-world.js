@@ -1,8 +1,7 @@
 // Headless checks for world size and starting herds. Usage: node tools/test-world.js
 const fs = require('fs'), path = require('path'), assert = require('node:assert/strict');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-// think-core (decisions) must load before sim-core, which uses its THINK global
-const src = ['think-core', 'sim-core'].map(id => html.match(new RegExp(`<script id="${id}">([\\s\\S]*?)<\\/script>`))[1]).join('\n');
+const src = html.match(/<script id="sim-core">([\s\S]*?)<\/script>/)[1];
 const GOL = new Function('module', src + '\nreturn GOL;')(undefined);
 const test = (name, fn) => { fn(); console.log('ok -', name); };
 test('world is 320 x 200 tiles', () => {
@@ -23,6 +22,6 @@ test('one year runs with all five species alive', () => {
   const w = GOL.createWorld(7919, 'balanced');
   for (let t = 0; t < GOL.YEAR; t++) { GOL.step(w); w.events.length = 0; }
   assert.ok(w.counts.every(c => c > 0), w.counts.join());
-  assert.ok(w.animals.length < GOL.MAX_ANIMALS);
+  assert.ok(w.liveN < GOL.MAX_ANIMALS);
 });
 console.log('test-world: all passed');

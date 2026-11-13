@@ -2,8 +2,7 @@
 // Each override set: { "lion": {"metab":0.6}, "cheetah": {...} }
 const fs = require('fs'), path = require('path');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-// think-core (decisions) must load before sim-core, which uses its THINK global
-const src = ['think-core', 'sim-core'].map(id => html.match(new RegExp(`<script id="${id}">([\\s\\S]*?)<\\/script>`))[1]).join('\n');
+const src = html.match(/<script id="sim-core">([\s\S]*?)<\/script>/)[1];
 const sets = JSON.parse(process.argv[2]); const years = +(process.argv[3] || 12), seeds = +(process.argv[4] || 4);
 for (const ov of sets) {
   let score = 0; const fin = [];

@@ -443,229 +443,35 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 </div>
 
 <!-- ===================== SIMULATION CORE (no DOM) ===================== -->
-<script id="think-core">
-// ===================== THINK CORE (no DOM, no objects) =====================
-// How animals decide what to do ("think"), computed from a snapshot of the world held in
-// typed arrays. The master thread fills the snapshot at the start of each day; slave Web
-// Workers and the master then share out the animals that are due to think. Every decision
-// is a pure function of the snapshot (the one dice roll is a hash of seed, day and animal),
-// so the result is identical whether 1 thread or 16 do the work.
-const THINK = (() => {
-  'use strict';
-  const MODES = ['graze', 'flee', 'mate', 'hunt', 'search', 'rest', 'follow', 'attack', 'wander'];
-  const M = {}; MODES.forEach((m, i) => { M[m] = i; });
-  const PREY_MASK = 0b00111, PRED_MASK = 0b11000;
-  // control block (Int32Array on a SharedArrayBuffer) used to share out work between threads
-  const C_GEN = 0, C_NEXT = 1, C_COUNT = 2, C_DONE = 3, C_STOP = 4, C_SIZE = 8, BLOCK = 16;
-
-  let SP, W, H, CH, CW, CN;
-  let occ, cover, chunks, x, y, sp, male, age, energy, preg, cd, atk, alert, life, mom, id, outMode, outTgt, doneGen, due, meta;
-
-  function setup(cfg) { SP = cfg.species; W = cfg.W; H = cfg.H; CH = cfg.CH; CW = W / CH; CN = CW * (H / CH); }
-  // Lay out every snapshot array on one buffer (ArrayBuffer or SharedArrayBuffer).
-  function layout(cap, n) {
-    const f = [['occ', Int32Array, n], ['cover', Uint8Array, n], ['chunks', Int32Array, 5 * CN],
-      ['x', Int16Array, cap], ['y', Int16Array, cap], ['sp', Int8Array, cap], ['male', Uint8Array, cap],
-      ['age', Int32Array, cap], ['energy', Float32Array, cap], ['preg', Int32Array, cap], ['cd', Int32Array, cap],
-      ['atk', Int32Array, cap], ['alert', Int32Array, cap], ['life', Float32Array, cap], ['mom', Int32Array, cap],
-      ['id', Int32Array, cap], ['outMode', Uint8Array, cap], ['outTgt', Int32Array, cap], ['doneGen', Int32Array, cap],
-      ['due', Int32Array, cap], ['meta', Int32Array, 4]];
-    let off = 0;
-    const plan = f.map(([name, T, len]) => { off = Math.ceil(off / 8) * 8; const p = { name, T, len, off }; off += len * T.BYTES_PER_ELEMENT; return p; });
-    return { plan, bytes: Math.ceil(off / 8) * 8 };
-  }
-  function views(buf, cap, n) {
-    const v = {};
-    for (const p of layout(cap, n).plan) v[p.name] = new p.T(buf, p.off, p.len);
-    return v;
-  }
-  function bind(v) {
-    ({ occ, cover, chunks, x, y, sp, male, age, energy, preg, cd, atk, alert, life, mom, id, outMode, outTgt, doneGen, due, meta } = v);
-  }
-
-  // meta: [day, seed, generation, unused]
-  function hrand(a, b, c) {
-    let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b + 0x632be5ab) | 0, 0xc2b2ae35) ^ Math.imul((c + 0x27d4eb2f) | 0, 0x165667b1);
-    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
-    return (h >>> 0) / 4294967296;
-  }
-  const cheb = (i, j) => Math.max(Math.abs(x[i] - x[j]), Math.abs(y[i] - y[j]));
-
-  function anyInBox(x0, y0, x1, y1, mask) {
-    x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W - 1, x1); y1 = Math.min(H - 1, y1);
-    const cx0 = (x0 / CH) | 0, cx1 = (x1 / CH) | 0, cy0 = (y0 / CH) | 0, cy1 = (y1 / CH) | 0;
-    for (let s = 0; s < 5; s++) {
-      if (!((mask >> s) & 1)) continue;
-      const base = s * CN;
-      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (chunks[base + cy * CW + cx]) return true;
-    }
-    return false;
-  }
-
-  // What counts as a match when searching outward for the nearest animal.
-  const Q_GROWN = 0, Q_MATE = 1, Q_ANY = 2, Q_CUB = 3;
-  function match(q, i, j) {
-    switch (q) {
-      case Q_GROWN: return age[j] >= SP[sp[j]].mature * 0.6;
-      case Q_MATE: return male[j] !== male[i] && ready(j, SP[sp[i]]);
-      case Q_ANY: return true;
-      default: return age[j] < SP[3].mature;   // Q_CUB: a lion cub
-    }
-  }
-  function findNearest(i, R, mask, q) {
-    const ax = x[i], ay = y[i];
-    if (!anyInBox(ax - R, ay - R, ax + R, ay + R, mask)) return -1;
-    for (let d = 1; d <= R; d++) {
-      const yA = ay - d, yB = ay + d, xL = ax - d, xR = ax + d;
-      for (let xx = Math.max(0, xL); xx <= Math.min(W - 1, xR); xx++) {
-        let j;
-        if (yA >= 0 && (j = occ[yA * W + xx]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
-        if (yB < H && (j = occ[yB * W + xx]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
-      }
-      for (let yy = Math.max(0, yA + 1); yy <= Math.min(H - 1, yB - 1); yy++) {
-        let j;
-        if (xL >= 0 && (j = occ[yy * W + xL]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
-        if (xR < W && (j = occ[yy * W + xR]) >= 0 && j !== i && ((mask >> sp[j]) & 1) && match(q, i, j)) return j;
-      }
-    }
-    return -1;
-  }
-
-  function ready(i, S) {
-    if (age[i] < S.mature || cd[i] > 0) return false;
-    if (male[i]) return energy[i] > S.maxE * 0.4;
-    return preg[i] === 0 && energy[i] > S.maxE * S.mateAt;
-  }
-  function crowd(i, R) {
-    let n = 0;
-    const s = sp[i];
-    for (let yy = Math.max(0, y[i] - R); yy <= Math.min(H - 1, y[i] + R); yy++)
-      for (let xx = Math.max(0, x[i] - R); xx <= Math.min(W - 1, x[i] + R); xx++) {
-        const j = occ[yy * W + xx];
-        if (j >= 0 && j !== i && sp[j] === s) n++;
-      }
-    return n;
-  }
-  function countAdj(j, s) {
-    let n = 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue;
-      const xx = x[j] + dx, yy = y[j] + dy;
-      if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-      const k = occ[yy * W + xx];
-      if (k >= 0 && sp[k] === s) n++;
-    }
-    return n;
-  }
-  function effStrength(i) {
-    const S = SP[sp[i]];
-    return (S.strength || 1) * (age[i] < S.mature ? 0.45 : 1) * (0.6 + 0.4 * Math.min(1, energy[i] / S.maxE));
-  }
-  // Same formula as the master's catchProb (sim-core), read from the snapshot.
-  function catchProb(i, j) {
-    const S = SP[sp[i]], P = SP[sp[j]];
-    let res = P.resistance * Math.sqrt(10 / effStrength(i));
-    if (age[j] < P.mature) res *= 0.55;
-    res *= 0.7 + 0.3 * Math.min(1, energy[j] / P.maxE);
-    if (age[j] > life[j] * 0.85) res *= 0.7;
-    if (P.hides && cover[y[j] * W + x[j]]) res = 1 - (1 - res) * 0.5;
-    res = Math.min(0.97, res);
-    const helpers = S.coop ? Math.min(3, countAdj(j, sp[i]) - (cheb(i, j) <= 1 ? 1 : 0)) : 0;
-    return Math.min(0.95, S.skill * (age[i] < S.mature ? 0.6 : 1) * (1 + 0.3 * Math.max(0, helpers)) * (1 - res));
-  }
-
-  // Predators pick the best expected meal per distance, but "switch" toward whatever prey is
-  // common around them (a search image), so rare prey get a refuge.
-  const candI = new Int32Array(1024), candS = new Float64Array(1024), cnt = [0, 0, 0];
-  function bestPrey(i, S) {
-    const R = S.sight, ax = x[i], ay = y[i];
-    const x0 = Math.max(0, ax - R), x1 = Math.min(W - 1, ax + R), y0 = Math.max(0, ay - R), y1 = Math.min(H - 1, ay + R);
-    if (!anyInBox(x0, y0, x1, y1, PREY_MASK)) return -1;
-    let nc = 0; cnt[0] = cnt[1] = cnt[2] = 0;
-    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
-      const j = occ[yy * W + xx];
-      if (j < 0 || sp[j] > 2) continue;
-      const P = SP[sp[j]];
-      if (P.hides && cover[yy * W + xx] && Math.max(Math.abs(xx - ax), Math.abs(yy - ay)) > 3) continue;
-      cnt[sp[j]]++;
-      const p = catchProb(i, j);
-      const ev = p * P.food * (age[j] < P.mature ? 0.5 : 1) - (1 - p) * (2 + P.counter * P.counterDmg);
-      if (ev <= 0 || nc >= 1024) continue;
-      const dx = xx - ax, dy = yy - ay;
-      candI[nc] = j; candS[nc] = ev / (Math.sqrt(dx * dx + dy * dy) + 3); nc++;
-    }
-    const tot = cnt[0] + cnt[1] + cnt[2];
-    let best = -1, bs = 0;
-    for (let k = 0; k < nc; k++) {
-      const share = cnt[sp[candI[k]]] / tot, sc = candS[k] * share * share;
-      if (sc > bs) { bs = sc; best = candI[k]; }
-    }
-    return best;
-  }
-
-  function out(i, mode, t) { outMode[i] = mode; outTgt[i] = t; }
-  function thinkPrey(i, S) {
-    if (S.flees || alert[i] > 0) {
-      const t = findNearest(i, S.sight + (alert[i] > 0 ? 2 : 0), PRED_MASK, Q_GROWN);
-      if (t >= 0) return out(i, M.flee, t);
-    }
-    if (ready(i, S) && (male[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
-      const m = findNearest(i, S.sight * 2, 1 << sp[i], Q_MATE);
-      if (m >= 0) return out(i, M.mate, m);
-    }
-    out(i, M.graze, -1);
-  }
-  function thinkPred(i, S) {
-    const s = sp[i], juv = age[i] < S.mature, ef = energy[i] / S.maxE, rival = s === 3 ? 4 : 3;
-    if (s === 4) {   // cheetahs avoid grown lions
-      const l = findNearest(i, 4, 1 << 3, Q_GROWN);
-      if (l >= 0) return out(i, M.flee, l);
-    }
-    if (juv && age[i] < S.mature * 0.6 && mom[i] >= 0) return out(i, M.follow, mom[i]);
-    if (!juv && hrand(meta[1], meta[0], id[i]) < S.aggression) {
-      // Lions attack cheetahs; cheetahs pick on unguarded lion cubs.
-      const t = findNearest(i, 5, 1 << rival, s === 3 ? Q_ANY : Q_CUB);
-      if (t >= 0) return out(i, M.attack, t);
-    }
-    if (ef < S.hungerAt && atk[i] === 0) {
-      const p = bestPrey(i, S);
-      return p >= 0 ? out(i, M.hunt, p) : out(i, M.search, -1);
-    }
-    if (ready(i, S) && (male[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
-      const m = findNearest(i, S.sight * 3, 1 << s, Q_MATE);
-      return m >= 0 ? out(i, M.mate, m) : out(i, M.wander, -1);
-    }
-    out(i, M.rest, -1);
-  }
-  function decide(i) {
-    const S = SP[sp[i]];
-    if (S.isPrey) thinkPrey(i, S); else thinkPred(i, S);
-    doneGen[i] = meta[2];
-  }
-  // Take blocks of due animals until none are left (master and slaves call this together).
-  function work(ctrl) {
-    for (;;) {
-      const s = Atomics.add(ctrl, C_NEXT, BLOCK), n = Atomics.load(ctrl, C_COUNT);
-      if (s >= n) return;
-      const e = Math.min(n, s + BLOCK);
-      for (let k = s; k < e; k++) decide(due[k]);
-    }
-  }
-  return { MODES, M, C_GEN, C_NEXT, C_COUNT, C_DONE, C_STOP, C_SIZE, setup, layout, views, bind, decide, work, hrand };
-})();
-if (typeof module !== 'undefined') module.exports = THINK;
-</script>
-
 <script id="sim-core">
+// ===================== SIMULATION CORE (no DOM; runs on the page and in Web Workers) =====================
+// All world state lives in typed arrays on one buffer (a SharedArrayBuffer when multicore is
+// available), so helper threads can work on it directly. Each day runs in parallel phases:
+//   G: grass regrows, in 16 bands of rows
+//   A/B: the map is cut into 8 vertical strips, 40 tiles wide. First one colour of strips runs
+//        (all at once), then the other. A strip only reads and writes within 27 + 8 tiles of
+//        itself, so two strips of the same colour never touch the same cells.
+// Every strip has its own seeded random numbers and its own slots for newborns, and events and
+// statistics are merged in strip order, so a world plays out the same on 1 thread or 16.
 const GOL = (() => {
   'use strict';
   const W = 320, H = 200, N = W * H, YEAR = 360;
   const CH = 10, CW = W / CH, CHH = H / CH, CN = CW * CHH;
   const T_GRASS = 0, T_WATER = 1, T_TREE = 2, T_ROCK = 3;
   const PREY_MASK = 0b00111, PRED_MASK = 0b11000;
-  const D8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const D8X = [1, -1, 0, 0, 1, 1, -1, -1], D8Y = [0, 0, 1, -1, 1, -1, 1, -1];
   const HIST_CAP = 2400, SAMPLE_EVERY = 4, MAX_ANIMALS = 24000;
   const CAUSES = ['eaten', 'starve', 'age', 'fight'];
+  const MODES = ['graze', 'flee', 'mate', 'hunt', 'search', 'rest', 'follow', 'attack', 'wander'];
+  const M = {}; MODES.forEach((m, i) => { M[m] = i; });
+  // parallel layout
+  const NS = 8, SW = W / NS, BANDS = 16;
+  const CAP = 32768;            // animal slots: living animals + recently dead (kept for the UI)
+  const QUARANTINE = 120;       // days a dead animal's slot is kept before reuse
+  const FREE_PER_STRIP = 1024;  // newborn slots handed to each strip per day
+  const EV_CAP = 2048, EV_F = 8; // events per strip per day, fields per event
+  const STATN = 32;             // per-strip stats: births 0-4, kills 5-9, deaths 10-29 (sp*4+cause), fights 30
+  const E_DEATH = 1, E_KILL = 2, E_GORE = 3, E_FIGHT = 4, E_MATE = 5, E_BIRTH = 6;
 
   // Index 0..2 = Prey A/B/C, 3..4 = Predator A/B
   const SPECIES = [
@@ -688,9 +494,68 @@ const GOL = (() => {
     { key:'cheetah', name:'Cheetah', plural:'Cheetahs', role:'Predator B', isPrey:false,
       color:'#ff5468', speed:2.0, sight:9, maxE:130, metab:0.45, moveCost:0.07,
       mature:170, gestation:85, litter:[1,3], cooldown:180, life:[1300,1700],
-      strength:6, skill:0.65, hungerAt:0.72, aggression:0.04, birthCost:0.1, mateAt:0.6, crowdR:14, crowdMax:3, recover:8, chase:10 },
+      strength:6, skill:0.62, hungerAt:0.72, aggression:0.04, birthCost:0.1, mateAt:0.6, crowdR:14, crowdMax:3, recover:8, chase:10 },
   ];
 
+  // ---------- memory layout: every array the simulation uses, on one buffer ----------
+  const FIELDS = [
+    // map
+    ['terrain', Uint8Array, N], ['cover', Uint8Array, N], ['fert', Float32Array, N], ['cap', Float32Array, N],
+    ['grass', Float32Array, N], ['occ', Int32Array, N], ['chunks', Int32Array, 5 * CN],
+    // animals (by slot)
+    ['alive', Uint8Array, CAP], ['sp', Uint8Array, CAP], ['male', Uint8Array, CAP], ['face', Int8Array, CAP],
+    ['mode', Uint8Array, CAP], ['named', Uint8Array, CAP], ['injected', Uint8Array, CAP], ['rethink', Uint8Array, CAP],
+    ['cause', Uint8Array, CAP], ['by', Int8Array, CAP],
+    ['x', Int16Array, CAP], ['y', Int16Array, CAP],
+    ['age', Int32Array, CAP], ['preg', Int32Array, CAP], ['cd', Int32Array, CAP], ['think', Int32Array, CAP],
+    ['atk', Int32Array, CAP], ['alert', Int32Array, CAP], ['chase', Int32Array, CAP], ['gen', Int32Array, CAP],
+    ['tgt', Int32Array, CAP], ['mom', Int32Array, CAP], ['fam', Int32Array, CAP], ['sireFam', Int32Array, CAP],
+    ['deathTick', Int32Array, CAP],
+    ['energy', Float32Array, CAP], ['acc', Float32Array, CAP], ['hx', Float32Array, CAP], ['hy', Float32Array, CAP],
+    ['life', Float32Array, CAP],
+    ['id', Float64Array, CAP], ['tgtId', Float64Array, CAP], ['momId', Float64Array, CAP],
+    // per-day work lists and results
+    ['slist', Int32Array, CAP], ['sstart', Int32Array, NS], ['slen', Int32Array, NS],
+    ['free', Int32Array, NS * FREE_PER_STRIP], ['flen', Int32Array, NS], ['fused', Int32Array, NS],
+    ['stats', Int32Array, NS * STATN], ['ev', Int32Array, NS * EV_CAP * EV_F], ['evlen', Int32Array, NS],
+    ['gsum', Float64Array, BANDS], ['params', Float64Array, 16],
+  ];
+  function layout() {
+    let off = 0;
+    const plan = FIELDS.map(([name, T, len]) => { off = Math.ceil(off / 8) * 8; const p = { name, T, len, off }; off += len * T.BYTES_PER_ELEMENT; return p; });
+    return { plan, bytes: Math.ceil(off / 8) * 8 };
+  }
+  function viewsOf(buf) { const v = {}; for (const p of layout().plan) v[p.name] = new p.T(buf, p.off, p.len); return v; }
+
+  // ---------- the arrays currently being worked on (module-level for speed) ----------
+  let V = null;
+  let TER, COVER, FERT, CAPG, GRASS, OCC, CHUNKS, ALIVE, SPA, MALE, FACE, MODE, NAMED, INJ, RETH, CAUSE, BY,
+    X, Y, AGE, PREG, CD, THINKC, ATK, ALERT, CHASE, GEN, TGT, MOM, FAM, SFAM, DTICK, EN, ACC, HX, HY, LIFE,
+    ID, TGTID, MOMID, SLIST, SSTART, SLEN, FREE, FLEN, FUSED, STATS, EV, EVLEN, GSUM, PARAMS;
+  function bindViews(v) {
+    if (V === v) return;
+    V = v;
+    ({ terrain: TER, cover: COVER, fert: FERT, cap: CAPG, grass: GRASS, occ: OCC, chunks: CHUNKS, alive: ALIVE, sp: SPA,
+      male: MALE, face: FACE, mode: MODE, named: NAMED, injected: INJ, rethink: RETH, cause: CAUSE, by: BY, x: X, y: Y,
+      age: AGE, preg: PREG, cd: CD, think: THINKC, atk: ATK, alert: ALERT, chase: CHASE, gen: GEN, tgt: TGT, mom: MOM,
+      fam: FAM, sireFam: SFAM, deathTick: DTICK, energy: EN, acc: ACC, hx: HX, hy: HY, life: LIFE, id: ID, tgtId: TGTID,
+      momId: MOMID, slist: SLIST, sstart: SSTART, slen: SLEN, free: FREE, flen: FLEN, fused: FUSED, stats: STATS,
+      ev: EV, evlen: EVLEN, gsum: GSUM, params: PARAMS } = v);
+  }
+
+  // ---------- context: which strip is running (-1 = the page, between days) ----------
+  let CUR = -1, RS = 1, IDNEXT = 0, SER = null;   // SER: the world, for serial work on the page
+  function rand() {   // mulberry32 on the current stream
+    RS = (RS + 0x6D2B79F5) | 0;
+    let t = Math.imul(RS ^ (RS >>> 15), 1 | RS);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  function mix(a, b, c) {
+    let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b + 0x632be5ab) | 0, 0xc2b2ae35) ^ Math.imul((c + 0x27d4eb2f) | 0, 0x165667b1);
+    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
+    return h | 0;
+  }
   function mulberry32(a) {
     return function () {
       a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -700,10 +565,10 @@ const GOL = (() => {
     };
   }
 
-  function makeNoise(rand) {
+  function makeNoise(r) {
     const perm = new Uint8Array(512), vals = new Float32Array(256), p = [];
-    for (let i = 0; i < 256; i++) { p.push(i); vals[i] = rand(); }
-    for (let i = 255; i > 0; i--) { const j = (rand() * (i + 1)) | 0; const t = p[i]; p[i] = p[j]; p[j] = t; }
+    for (let i = 0; i < 256; i++) { p.push(i); vals[i] = r(); }
+    for (let i = 255; i > 0; i--) { const j = (r() * (i + 1)) | 0; const t = p[i]; p[i] = p[j]; p[j] = t; }
     for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
     const lat = (x, y) => vals[perm[(x & 255) + perm[y & 255]]];
     const sm = t => t * t * (3 - 2 * t);
@@ -720,31 +585,41 @@ const GOL = (() => {
   }
 
   // ---------- world ----------
+  let ALLOC = bytes => new ArrayBuffer(bytes);
+  function setAllocator(fn) { ALLOC = fn || (bytes => new ArrayBuffer(bytes)); }
   function createWorld(seed, preset) {
+    const buf = ALLOC(layout().bytes);
     const w = {
-      seed, rand: mulberry32(seed), tick: 0,
-      terrain: new Uint8Array(N), fert: new Float32Array(N), cap: new Float32Array(N), grass: new Float32Array(N),
-      occ: new Array(N).fill(null), animals: [], nextId: 1, landCells: 0,
-      rain: 1, seasons: true, avgGrass: 0,
+      seed, tick: 0, buf, v: viewsOf(buf), rng: (seed ^ 0x5bd1e995) | 0,
+      nextId: 1, landCells: 0, rain: 1, seasons: true, avgGrass: 0,
+      live: new Int32Array(CAP), liveN: 0, freeList: [], quarantine: [],
       counts: [0,0,0,0,0], males: [0,0,0,0,0], juveniles: [0,0,0,0,0], prevCounts: [0,0,0,0,0],
       births: [0,0,0,0,0], kills: [0,0,0,0,0], injected: [0,0,0,0,0],
       deaths: SPECIES.map(() => ({ eaten:0, starve:0, age:0, fight:0 })),
       extinctAt: [-1,-1,-1,-1,-1], fights: 0,
-      chunks: new Int32Array(5 * CN),
       hist: { len: 0, data: SPECIES.map(() => new Float32Array(HIST_CAP)), grass: new Float32Array(HIST_CAP) },
       events: [], seasonName: '',
     };
-    genTerrain(w);
-    if (preset === 'balanced') populate(w);
+    for (let s = CAP - 1; s >= 0; s--) w.freeList.push(s);   // slot 0 is handed out first
+    w.terrain = w.v.terrain; w.grass = w.v.grass;   // read by the page's renderer
+    w.v.occ.fill(-1); w.v.tgt.fill(-1); w.v.mom.fill(-1);
+    serial(w, () => { genTerrain(w); if (preset === 'balanced') populate(w); });
     recount(w);
     w.prevCounts = w.counts.slice();
     w.seasonName = seasonInfo(w).name;
     return w;
   }
+  // Run code on the page (not in a strip): random numbers come from the world's own stream.
+  function serial(w, fn) {
+    bindViews(w.v);
+    const prevCur = CUR, prevRS = RS, prevSer = SER;
+    CUR = -1; RS = w.rng; SER = w;
+    try { return fn(); } finally { w.rng = RS; CUR = prevCur; RS = prevRS; SER = prevSer; }
+  }
 
   function genTerrain(w) {
-    const r = w.rand, fbm = makeNoise(r);
-    const ox = r() * 1000, oy = r() * 1000;
+    const fbm = makeNoise(rand);
+    const ox = rand() * 1000, oy = rand() * 1000;
     const elev = new Float32Array(N), moist = new Float32Array(N);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
@@ -753,13 +628,10 @@ const GOL = (() => {
     }
     const sorted = Float32Array.from(elev).sort();
     const wT = sorted[Math.floor(N * 0.075)], rT = sorted[Math.floor(N * 0.975)];
-    for (let i = 0; i < N; i++) {
-      w.terrain[i] = elev[i] < wT ? T_WATER : (elev[i] > rT && moist[i] < 0.55 ? T_ROCK : T_GRASS);
-    }
-    // distance to water (BFS, 4-neighbour)
+    for (let i = 0; i < N; i++) TER[i] = elev[i] < wT ? T_WATER : (elev[i] > rT && moist[i] < 0.55 ? T_ROCK : T_GRASS);
     const dist = new Int16Array(N).fill(99), q = new Int32Array(N);
     let qh = 0, qt = 0;
-    for (let i = 0; i < N; i++) if (w.terrain[i] === T_WATER) { dist[i] = 0; q[qt++] = i; }
+    for (let i = 0; i < N; i++) if (TER[i] === T_WATER) { dist[i] = 0; q[qt++] = i; }
     while (qh < qt) {
       const i = q[qh++], d = dist[i];
       if (d >= 12) continue;
@@ -771,88 +643,91 @@ const GOL = (() => {
     }
     let land = 0;
     for (let i = 0; i < N; i++) {
-      if (w.terrain[i] === T_WATER) continue;
+      if (TER[i] === T_WATER) continue;
       const f = Math.max(0.15, Math.min(1, 0.25 + 0.55 * moist[i] + Math.max(0, 12 - dist[i]) / 12 * 0.35));
-      w.fert[i] = f; w.cap[i] = 0.4 + 0.6 * f;
-      if (w.terrain[i] === T_GRASS && dist[i] > 1 && r() < 0.008 + Math.max(0, moist[i] - 0.5) * 0.06) w.terrain[i] = T_TREE;
-      if (w.terrain[i] === T_GRASS) { w.grass[i] = w.cap[i] * (0.6 + 0.35 * r()); land++; }
+      FERT[i] = f; CAPG[i] = 0.4 + 0.6 * f;
+      if (TER[i] === T_GRASS && dist[i] > 1 && rand() < 0.008 + Math.max(0, moist[i] - 0.5) * 0.06) TER[i] = T_TREE;
+      if (TER[i] === T_GRASS) { GRASS[i] = CAPG[i] * (0.6 + 0.35 * rand()); land++; }
     }
     w.landCells = land;
-    w.cover = new Uint8Array(N);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const t = w.terrain[y * W + x];
+      const t = TER[y * W + x];
       if (t !== T_TREE && t !== T_ROCK) continue;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const nx = x + dx, ny = y + dy;
-        if (nx >= 0 && ny >= 0 && nx < W && ny < H) w.cover[ny * W + nx] = 1;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H) COVER[ny * W + nx] = 1;
       }
     }
   }
 
-  function isFree(w, x, y) {
+  function isFree(x, y) {
     if (x < 0 || y < 0 || x >= W || y >= H) return false;
     const i = y * W + x;
-    return w.terrain[i] === T_GRASS && w.occ[i] === null;
+    return TER[i] === T_GRASS && OCC[i] < 0;
   }
-
-  function findFreeNear(w, x, y, R) {
+  const cand = new Int32Array(1024);
+  // A free grass cell near (x, y), as y * W + x, or -1.
+  function findFreeNear(x, y, R) {
     x = Math.max(0, Math.min(W - 1, x | 0)); y = Math.max(0, Math.min(H - 1, y | 0));
-    if (isFree(w, x, y)) return { x, y };
-    const cand = [];
+    if (isFree(x, y)) return y * W + x;
     for (let d = 1; d <= R; d++) {
-      cand.length = 0;
+      let n = 0;
       for (let dx = -d; dx <= d; dx++) {
-        if (isFree(w, x + dx, y - d)) cand.push(x + dx, y - d);
-        if (isFree(w, x + dx, y + d)) cand.push(x + dx, y + d);
+        if (isFree(x + dx, y - d)) cand[n++] = (y - d) * W + x + dx;
+        if (isFree(x + dx, y + d)) cand[n++] = (y + d) * W + x + dx;
       }
       for (let dy = -d + 1; dy <= d - 1; dy++) {
-        if (isFree(w, x - d, y + dy)) cand.push(x - d, y + dy);
-        if (isFree(w, x + d, y + dy)) cand.push(x + d, y + dy);
+        if (isFree(x - d, y + dy)) cand[n++] = (y + dy) * W + x - d;
+        if (isFree(x + d, y + dy)) cand[n++] = (y + dy) * W + x + d;
       }
-      if (cand.length) { const k = ((w.rand() * cand.length / 2) | 0) * 2; return { x: cand[k], y: cand[k + 1] }; }
+      if (n) return cand[(rand() * n) | 0];
     }
-    return null;
+    return -1;
   }
 
-  function newHeading(a, r) { const ang = r() * Math.PI * 2; a.hx = Math.cos(ang); a.hy = Math.sin(ang); }
+  function newHeading(s) { const ang = rand() * Math.PI * 2; HX[s] = Math.cos(ang); HY[s] = Math.sin(ang); }
 
-  function makeAnimal(w, sp, male, x, y, age, energyFrac) {
-    const S = SPECIES[sp], r = w.rand;
-    const a = {
-      id: w.nextId++, sp, male, x, y, age, energy: S.maxE * energyFrac, alive: true,
-      preg: 0, cd: 0, think: (r() * 3) | 0, mode: S.isPrey ? 'graze' : 'rest', tgt: null,
-      face: r() < 0.5 ? 1 : -1, acc: r(), atk: 0, alert: 0, hx: 1, hy: 0,
-      life: S.life[0] + r() * (S.life[1] - S.life[0]), mom: null, injected: false,
-      cause: null, by: -1, gen: 0, chase: 0, fam: '', sireFam: '', named: false, _i: -1, rethink: false,
-    };
-    newHeading(a, r);
-    w.occ[y * W + x] = a;
-    w.animals.push(a);
-    return a;
+  function allocSlot() {
+    if (CUR < 0) return SER.freeList.length ? SER.freeList.pop() : -1;
+    if (FUSED[CUR] >= FLEN[CUR]) return -1;
+    return FREE[CUR * FREE_PER_STRIP + FUSED[CUR]++];
+  }
+  function makeAnimal(sp, male, x, y, age, energyFrac) {
+    const s = allocSlot();
+    if (s < 0) return -1;
+    const S = SPECIES[sp];
+    ID[s] = CUR < 0 ? SER.nextId++ : IDNEXT++;
+    ALIVE[s] = 1; SPA[s] = sp; MALE[s] = male ? 1 : 0; X[s] = x; Y[s] = y; AGE[s] = age; EN[s] = S.maxE * energyFrac;
+    PREG[s] = 0; CD[s] = 0; THINKC[s] = (rand() * 3) | 0; MODE[s] = S.isPrey ? M.graze : M.rest; TGT[s] = -1; TGTID[s] = 0;
+    FACE[s] = rand() < 0.5 ? 1 : -1; ACC[s] = rand(); ATK[s] = 0; ALERT[s] = 0;
+    LIFE[s] = S.life[0] + rand() * (S.life[1] - S.life[0]); MOM[s] = -1; MOMID[s] = 0; INJ[s] = 0;
+    CAUSE[s] = 0; BY[s] = -1; GEN[s] = 0; CHASE[s] = 0; FAM[s] = 0; SFAM[s] = 0; NAMED[s] = 0; RETH[s] = 0; DTICK[s] = 0;
+    newHeading(s);
+    OCC[y * W + x] = s;
+    return s;
   }
 
-  function randomLand(w) {
+  function randomLand() {
     for (let k = 0; k < 2000; k++) {
-      const x = (w.rand() * W) | 0, y = (w.rand() * H) | 0;
-      if (isFree(w, x, y)) return { x, y };
+      const x = (rand() * W) | 0, y = (rand() * H) | 0;
+      if (isFree(x, y)) return y * W + x;
     }
-    return null;
+    return -1;
   }
-
   function populate(w) {
     const plan = [[0, 144, 16], [1, 320, 24], [2, 800, 40], [3, 48, 12], [4, 48, 12]];
-    const r = w.rand;
     for (const [sp, n, groups] of plan) {
       const S = SPECIES[sp], per = Math.ceil(n / groups);
       let placed = 0;
       for (let g = 0; g < groups && placed < n; g++) {
-        const c0 = randomLand(w); if (!c0) continue;
+        const c0 = randomLand(); if (c0 < 0) continue;
+        const cx = c0 % W, cy = (c0 / W) | 0;
         for (let k = 0; k < per && placed < n; k++) {
-          const c = findFreeNear(w, c0.x + ((r() * 9) | 0) - 4, c0.y + ((r() * 9) | 0) - 4, 6);
-          if (!c) break;
-          const age = Math.min(S.life[0] * 0.6, S.mature * (0.8 + r()));
-          makeAnimal(w, sp, k % 2 === 0, c.x, c.y, Math.floor(age), 0.65 + r() * 0.25);
-          placed++;
+          const c = findFreeNear(cx + ((rand() * 9) | 0) - 4, cy + ((rand() * 9) | 0) - 4, 6);
+          if (c < 0) break;
+          const age = Math.min(S.life[0] * 0.6, S.mature * (0.8 + rand()));
+          const s = makeAnimal(sp, k % 2 === 0, c % W, (c / W) | 0, Math.floor(age), 0.65 + rand() * 0.25);
+          if (s >= 0) { w.live[w.liveN++] = s; placed++; }
         }
       }
     }
@@ -864,7 +739,7 @@ const GOL = (() => {
     const ph = (t % YEAR) / YEAR;
     const c = Math.cos(2 * Math.PI * ph);
     if (!w.seasons) return { factor: 0.62, dryness: 0.35, name: 'Mild', phase: ph };
-    const factor = 0.575 + 0.425 * c;           // 1.0 (peak wet) .. 0.15 (peak dry)
+    const factor = 0.575 + 0.425 * c;
     const dryness = (1 - c) / 2;
     let name;
     if (c > 0.3) name = 'Wet season';
@@ -874,443 +749,581 @@ const GOL = (() => {
   }
 
   // ---------- spatial queries ----------
-  function anyInBox(w, x0, y0, x1, y1, mask) {
+  function anyInBox(x0, y0, x1, y1, mask) {
     x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W - 1, x1); y1 = Math.min(H - 1, y1);
     const cx0 = (x0 / CH) | 0, cx1 = (x1 / CH) | 0, cy0 = (y0 / CH) | 0, cy1 = (y1 / CH) | 0;
-    const ch = w.chunks;
-    for (let sp = 0; sp < 5; sp++) {
-      if (!((mask >> sp) & 1)) continue;
-      const base = sp * CN;
-      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (ch[base + cy * CW + cx]) return true;
+    for (let s = 0; s < 5; s++) {
+      if (!((mask >> s) & 1)) continue;
+      const base = s * CN;
+      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (CHUNKS[base + cy * CW + cx]) return true;
     }
     return false;
   }
-
-  function adjacentOf(w, a, sp) {
-    for (let k = 0; k < 8; k++) {
-      const x = a.x + D8[k][0], y = a.y + D8[k][1];
-      if (x < 0 || y < 0 || x >= W || y >= H) continue;
-      const o = w.occ[y * W + x];
-      if (o && o.sp === sp) return o;
+  const Q_GROWN = 0, Q_MATE = 1, Q_ANY = 2, Q_CUB = 3;
+  function match(q, i, j) {
+    switch (q) {
+      case Q_GROWN: return AGE[j] >= SPECIES[SPA[j]].mature * 0.6;
+      case Q_MATE: return MALE[j] !== MALE[i] && ready(j, SPECIES[SPA[i]]);
+      case Q_ANY: return true;
+      default: return AGE[j] < SPECIES[3].mature;
     }
-    return null;
   }
-  function countAdj(w, a, sp) {
+  function findNearest(i, R, mask, q) {
+    const ax = X[i], ay = Y[i];
+    if (!anyInBox(ax - R, ay - R, ax + R, ay + R, mask)) return -1;
+    for (let d = 1; d <= R; d++) {
+      const yA = ay - d, yB = ay + d, xL = ax - d, xR = ax + d;
+      for (let xx = Math.max(0, xL); xx <= Math.min(W - 1, xR); xx++) {
+        let j;
+        if (yA >= 0 && (j = OCC[yA * W + xx]) >= 0 && j !== i && ((mask >> SPA[j]) & 1) && match(q, i, j)) return j;
+        if (yB < H && (j = OCC[yB * W + xx]) >= 0 && j !== i && ((mask >> SPA[j]) & 1) && match(q, i, j)) return j;
+      }
+      for (let yy = Math.max(0, yA + 1); yy <= Math.min(H - 1, yB - 1); yy++) {
+        let j;
+        if (xL >= 0 && (j = OCC[yy * W + xL]) >= 0 && j !== i && ((mask >> SPA[j]) & 1) && match(q, i, j)) return j;
+        if (xR < W && (j = OCC[yy * W + xR]) >= 0 && j !== i && ((mask >> SPA[j]) & 1) && match(q, i, j)) return j;
+      }
+    }
+    return -1;
+  }
+  function adjacentOf(s, sp) {
+    for (let k = 0; k < 8; k++) {
+      const x = X[s] + D8X[k], y = Y[s] + D8Y[k];
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const o = OCC[y * W + x];
+      if (o >= 0 && SPA[o] === sp) return o;
+    }
+    return -1;
+  }
+  function countAdj(s, sp) {
     let n = 0;
     for (let k = 0; k < 8; k++) {
-      const x = a.x + D8[k][0], y = a.y + D8[k][1];
+      const x = X[s] + D8X[k], y = Y[s] + D8Y[k];
       if (x < 0 || y < 0 || x >= W || y >= H) continue;
-      const o = w.occ[y * W + x];
-      if (o && o !== a && o.sp === sp) n++;
+      const o = OCC[y * W + x];
+      if (o >= 0 && o !== s && SPA[o] === sp) n++;
     }
     return n;
   }
-  const cheb = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const cheb = (a, b) => Math.max(Math.abs(X[a] - X[b]), Math.abs(Y[a] - Y[b]));
+  const tgtOf = s => { const t = TGT[s]; return t >= 0 && ALIVE[t] && ID[t] === TGTID[s] ? t : -1; };
+  function setTgt(s, t) { TGT[s] = t; TGTID[s] = t >= 0 ? ID[t] : 0; }
 
   // ---------- combat helpers ----------
-  function effStrength(a) {
-    const S = SPECIES[a.sp];
-    const juv = a.age < S.mature;
-    return (S.strength || 1) * (juv ? 0.45 : 1) * (0.6 + 0.4 * Math.min(1, a.energy / S.maxE));
+  function effStrength(s) {
+    const S = SPECIES[SPA[s]];
+    return (S.strength || 1) * (AGE[s] < S.mature ? 0.45 : 1) * (0.6 + 0.4 * Math.min(1, EN[s] / S.maxE));
   }
-  function catchProb(w, a, o) {
-    const S = SPECIES[a.sp], P = SPECIES[o.sp];
+  function catchProb(a, o) {
+    const S = SPECIES[SPA[a]], P = SPECIES[SPA[o]];
     let res = P.resistance * Math.sqrt(10 / effStrength(a));
-    if (o.age < P.mature) res *= 0.55;
-    res *= 0.7 + 0.3 * Math.min(1, o.energy / P.maxE);
-    if (o.age > o.life * 0.85) res *= 0.7;
-    if (P.hides && w.cover[o.y * W + o.x]) res = 1 - (1 - res) * 0.5;
+    if (AGE[o] < P.mature) res *= 0.55;
+    res *= 0.7 + 0.3 * Math.min(1, EN[o] / P.maxE);
+    if (AGE[o] > LIFE[o] * 0.85) res *= 0.7;
+    if (P.hides && COVER[Y[o] * W + X[o]]) res = 1 - (1 - res) * 0.5;
     res = Math.min(0.97, res);
     // Cooperative hunting: every other hunter of the same kind next to the prey helps.
-    const helpers = S.coop ? Math.min(3, countAdj(w, o, a.sp) - (cheb(a, o) <= 1 ? 1 : 0)) : 0;
-    return Math.min(0.95, S.skill * (a.age < S.mature ? 0.6 : 1) * (1 + 0.3 * Math.max(0, helpers)) * (1 - res));
+    const helpers = S.coop ? Math.min(3, countAdj(o, SPA[a]) - (cheb(a, o) <= 1 ? 1 : 0)) : 0;
+    return Math.min(0.95, S.skill * (AGE[a] < S.mature ? 0.6 : 1) * (1 + 0.3 * Math.max(0, helpers)) * (1 - res));
   }
 
-  function emit(w, e) { if (w.events.length < 4000) w.events.push(e); }
+  // ---------- events and statistics (per strip, merged in strip order after the day) ----------
+  function emit(type, sp, x, y, a, b, c) {
+    if (CUR < 0) return;
+    const n = EVLEN[CUR];
+    if (n >= EV_CAP) return;
+    const o = (CUR * EV_CAP + n) * EV_F;
+    EV[o] = type; EV[o + 1] = sp; EV[o + 2] = x; EV[o + 3] = y; EV[o + 4] = a | 0; EV[o + 5] = b | 0; EV[o + 6] = c | 0;
+    EVLEN[CUR] = n + 1;
+  }
+  const stat = (k, n) => { if (CUR >= 0) STATS[CUR * STATN + k] += n; };
 
-  function die(w, a, cause, by) {
-    if (!a.alive) return;
-    a.alive = false; a.cause = cause; a.by = by === undefined ? -1 : by; a.deathTick = w.tick;
-    a.mom = null; a.tgt = null; // let dead ancestors be garbage-collected
-    const i = a.y * W + a.x;
-    if (w.occ[i] === a) w.occ[i] = null;
-    if (SNAP && a._i >= 0 && SNAP.occ[i] === a._i) SNAP.occ[i] = -1;   // keep the day's snapshot map live
-    w.deaths[a.sp][cause]++;
-    if (cause === 'starve' || cause === 'age') emit(w, { t: 'death', sp: a.sp, x: a.x, y: a.y, cause });
+  function die(s, cause, by) {
+    if (!ALIVE[s]) return;
+    ALIVE[s] = 0; CAUSE[s] = cause; BY[s] = by === undefined ? -1 : by; DTICK[s] = PARAMS[0];
+    MOM[s] = -1; TGT[s] = -1;
+    const i = Y[s] * W + X[s];
+    if (OCC[i] === s) OCC[i] = -1;
+    stat(10 + SPA[s] * 4 + cause, 1);
+    if (cause === 1 || cause === 2) emit(E_DEATH, SPA[s], X[s], Y[s], cause);
   }
 
-  function feed(w, a, food) {
-    const S = SPECIES[a.sp];
-    let pool = food;
-    const kin = [];
-    for (let y = Math.max(0, a.y - 3); y <= Math.min(H - 1, a.y + 3); y++)
-      for (let x = Math.max(0, a.x - 3); x <= Math.min(W - 1, a.x + 3); x++) {
-        const o = w.occ[y * W + x];
-        if (o && o !== a && o.sp === a.sp) kin.push(o);
+  const kin = new Int32Array(64);
+  function feed(s, food) {
+    const S = SPECIES[SPA[s]], sp = SPA[s];
+    let pool = food, nk = 0;
+    for (let y = Math.max(0, Y[s] - 3); y <= Math.min(H - 1, Y[s] + 3); y++)
+      for (let x = Math.max(0, X[s] - 3); x <= Math.min(W - 1, X[s] + 3); x++) {
+        const o = OCC[y * W + x];
+        if (o >= 0 && o !== s && SPA[o] === sp && nk < 64) kin[nk++] = o;
       }
-    // dependent young eat first
-    for (const j of kin) {
-      if (j.age >= S.mature || pool <= 0) continue;
-      const g = Math.min(S.maxE - j.energy, food * 0.3, pool);
-      if (g > 0) { j.energy += g; pool -= g; }
+    for (let k = 0; k < nk; k++) {   // dependent young eat first
+      const j = kin[k];
+      if (AGE[j] >= S.mature || pool <= 0) continue;
+      const g = Math.min(S.maxE - EN[j], food * 0.3, pool);
+      if (g > 0) { EN[j] += g; pool -= g; }
     }
-    const take = Math.min(pool, S.maxE - a.energy);
-    a.energy += take; pool -= take;
-    for (const k of kin) {
+    const take = Math.min(pool, S.maxE - EN[s]);
+    EN[s] += take; pool -= take;
+    for (let k = 0; k < nk; k++) {
       if (pool <= 1) break;
-      const g = Math.min(S.maxE - k.energy, pool * 0.5);
-      if (g > 0) { k.energy += g; pool -= g; }
+      const j = kin[k];
+      const g = Math.min(S.maxE - EN[j], pool * 0.5);
+      if (g > 0) { EN[j] += g; pool -= g; }
     }
   }
 
   // Alarm call: nearby animals of the same kind notice the attack and bolt.
-  function alarm(w, o, R) {
-    for (let y = Math.max(0, o.y - R); y <= Math.min(H - 1, o.y + R); y++)
-      for (let x = Math.max(0, o.x - R); x <= Math.min(W - 1, o.x + R); x++) {
-        const k = w.occ[y * W + x];
-        if (k && k !== o && k.sp === o.sp) { k.alert = 8; k.think = 0; k.rethink = true; }
+  function alarm(o, R) {
+    const sp = SPA[o];
+    for (let y = Math.max(0, Y[o] - R); y <= Math.min(H - 1, Y[o] + R); y++)
+      for (let x = Math.max(0, X[o] - R); x <= Math.min(W - 1, X[o] + R); x++) {
+        const k = OCC[y * W + x];
+        if (k >= 0 && k !== o && SPA[k] === sp) { ALERT[k] = 8; THINKC[k] = 0; RETH[k] = 1; }
       }
   }
 
-  function attack(w, a, o) {
-    if (a.atk > 0) return;
-    const P = SPECIES[o.sp];
-    a.atk = SPECIES[a.sp].recover;
-    if (w.rand() < catchProb(w, a, o)) {
-      const food = P.food * (o.age < P.mature ? 0.5 : 1);
-      const ox = o.x, oy = o.y;
-      die(w, o, 'eaten', a.sp);
-      feed(w, a, food);
-      w.kills[a.sp]++;
-      emit(w, { t: 'kill', sp: a.sp, prey: o.sp, x: ox, y: oy });
-      a.tgt = null; a.think = 0; a.rethink = true;
+  function attack(a, o) {
+    if (ATK[a] > 0) return;
+    const P = SPECIES[SPA[o]];
+    ATK[a] = SPECIES[SPA[a]].recover;
+    if (rand() < catchProb(a, o)) {
+      const food = P.food * (AGE[o] < P.mature ? 0.5 : 1);
+      const ox = X[o], oy = Y[o], osp = SPA[o];
+      die(o, 0, SPA[a]);
+      feed(a, food);
+      stat(5 + SPA[a], 1);
+      emit(E_KILL, SPA[a], ox, oy, osp);
+      setTgt(a, -1); THINKC[a] = 0; RETH[a] = 1;
     } else {
-      a.energy -= 2;
-      o.alert = 10; o.think = 0; o.rethink = true;
-      if (P.flees) alarm(w, o, 4);
+      EN[a] -= 2;
+      ALERT[o] = 10; THINKC[o] = 0; RETH[o] = 1;
+      if (P.flees) alarm(o, 4);
       if (P.counter > 0) {
-        const c = P.counter + 0.08 * countAdj(w, o, o.sp);
-        if (w.rand() < c) {
-          a.energy -= P.counterDmg; a.atk = 10;
-          emit(w, { t: 'gore', sp: a.sp, x: a.x, y: a.y });
-          if (a.energy <= 0) die(w, a, 'fight', o.sp);
-          else if (w.rand() < 0.5) { a.mode = 'rest'; a.tgt = null; a.think = 6; }
+        const c = P.counter + 0.08 * countAdj(o, SPA[o]);
+        if (rand() < c) {
+          EN[a] -= P.counterDmg; ATK[a] = 10;
+          emit(E_GORE, SPA[a], X[a], Y[a]);
+          if (EN[a] <= 0) die(a, 3, SPA[o]);
+          else if (rand() < 0.5) { MODE[a] = M.rest; setTgt(a, -1); THINKC[a] = 6; }
         }
       }
     }
   }
 
-  function fight(w, a, b) {
-    if (!a.alive || !b.alive || a.sp === b.sp) return;
+  function fight(a, b) {
+    if (!ALIVE[a] || !ALIVE[b] || SPA[a] === SPA[b]) return;
     const sa = effStrength(a), sb = effStrength(b);
-    const aWins = w.rand() < sa / (sa + sb);
+    const aWins = rand() < sa / (sa + sb);
     const win = aWins ? a : b, lose = aWins ? b : a;
-    win.energy -= 10; lose.energy -= 25;
-    a.atk = 8; b.atk = 8;
-    const killed = w.rand() < 0.55 || lose.energy <= 0;
-    const fx = lose.x, fy = lose.y;
-    if (killed) die(w, lose, 'fight', win.sp);
-    else { lose.mode = 'flee'; lose.tgt = win; lose.think = 8; }
-    if (win.alive && win.energy <= 0) die(w, win, 'fight', lose.sp);
-    if (win.alive) { win.tgt = null; win.mode = 'rest'; win.think = 0; win.rethink = true; }
-    w.fights++;
-    emit(w, { t: 'fight', x: fx, y: fy, win: win.sp, lose: lose.sp, killed });
+    EN[win] -= 10; EN[lose] -= 25;
+    ATK[a] = 8; ATK[b] = 8;
+    const killed = rand() < 0.55 || EN[lose] <= 0;
+    const fx = X[lose], fy = Y[lose], wsp = SPA[win], lsp = SPA[lose];
+    if (killed) die(lose, 3, wsp);
+    else { MODE[lose] = M.flee; setTgt(lose, win); THINKC[lose] = 8; }
+    if (ALIVE[win] && EN[win] <= 0) die(win, 3, lsp);
+    if (ALIVE[win]) { setTgt(win, -1); MODE[win] = M.rest; THINKC[win] = 0; RETH[win] = 1; }
+    stat(30, 1);
+    emit(E_FIGHT, 0, fx, fy, wsp, lsp, killed ? 1 : 0);
   }
 
-  function tryMate(w, a, b) {
-    const S = SPECIES[a.sp];
-    if (!b.alive || b.sp !== a.sp || b.male === a.male) return;
-    const fem = a.male ? b : a, mal = a.male ? a : b;
-    if (fem.preg > 0 || fem.cd > 0 || mal.cd > 0 || fem.age < S.mature || mal.age < S.mature) return;
-    if (crowd(w, fem, S.crowdR) > S.crowdMax) { fem.cd = 20; mal.cd = 12; a.tgt = b.tgt = null; return; }
-    fem.preg = S.gestation; mal.cd = 12;
-    fem.sireFam = mal.fam;   // family name (UI only) passes to the young from either parent
-    a.mode = b.mode = S.isPrey ? 'graze' : 'rest'; a.tgt = b.tgt = null;
-    emit(w, { t: 'mate', sp: a.sp, x: fem.x, y: fem.y });
+  function tryMate(a, b) {
+    const S = SPECIES[SPA[a]];
+    if (!ALIVE[b] || SPA[b] !== SPA[a] || MALE[b] === MALE[a]) return;
+    const fem = MALE[a] ? b : a, mal = MALE[a] ? a : b;
+    if (PREG[fem] > 0 || CD[fem] > 0 || CD[mal] > 0 || AGE[fem] < S.mature || AGE[mal] < S.mature) return;
+    if (crowd(fem, S.crowdR) > S.crowdMax) { CD[fem] = 20; CD[mal] = 12; setTgt(a, -1); setTgt(b, -1); return; }
+    PREG[fem] = S.gestation; CD[mal] = 12;
+    SFAM[fem] = FAM[mal];   // family name (UI only) passes to the young from either parent
+    MODE[a] = MODE[b] = S.isPrey ? M.graze : M.rest; setTgt(a, -1); setTgt(b, -1);
+    emit(E_MATE, SPA[a], X[fem], Y[fem]);
   }
 
-  function giveBirth(w, mom) {
-    const S = SPECIES[mom.sp], r = w.rand;
-    const ef = Math.min(1, mom.energy / S.maxE);
-    const n = S.litter[0] + Math.floor(r() * ef * (S.litter[1] - S.litter[0] + 1));
+  function giveBirth(mom) {
+    const sp = SPA[mom], S = SPECIES[sp];
+    const ef = Math.min(1, EN[mom] / S.maxE);
+    const n = S.litter[0] + Math.floor(rand() * ef * (S.litter[1] - S.litter[0] + 1));
     let born = 0;
+    const famId = FAM[mom] || SFAM[mom];
     for (let k = 0; k < n; k++) {
-      if (w.animals.length >= MAX_ANIMALS) break;
-      if (mom.energy < S.maxE * S.birthCost * 1.5) break;
-      const c = findFreeNear(w, mom.x, mom.y, 2);
-      if (!c) break;
-      const kid = makeAnimal(w, mom.sp, r() < 0.5, c.x, c.y, 0, 0.5);
-      kid.mom = mom; kid.gen = mom.gen + 1; kid.face = mom.face; kid.fam = mom.fam || mom.sireFam;
-      mom.energy -= S.maxE * S.birthCost;
+      if (EN[mom] < S.maxE * S.birthCost * 1.5) break;
+      const c = findFreeNear(X[mom], Y[mom], 2);
+      if (c < 0) break;
+      const kid = makeAnimal(sp, rand() < 0.5, c % W, (c / W) | 0, 0, 0.5);
+      if (kid < 0) break;   // no room left in the world
+      MOM[kid] = mom; MOMID[kid] = ID[mom]; GEN[kid] = GEN[mom] + 1; FACE[kid] = FACE[mom]; FAM[kid] = famId;
+      EN[mom] -= S.maxE * S.birthCost;
       born++;
     }
-    mom.cd = S.cooldown;
-    if (born) { w.births[mom.sp] += born; emit(w, { t: 'birth', sp: mom.sp, x: mom.x, y: mom.y, n: born, fam: mom.fam || mom.sireFam }); }
+    CD[mom] = S.cooldown;
+    if (born) { stat(sp, born); emit(E_BIRTH, sp, X[mom], Y[mom], born, famId); }
   }
 
   // ---------- decision making ----------
+  function ready(i, S) {
+    if (AGE[i] < S.mature || CD[i] > 0) return false;
+    if (MALE[i]) return EN[i] > S.maxE * 0.4;
+    return PREG[i] === 0 && EN[i] > S.maxE * S.mateAt;
+  }
   // Density-dependent breeding: females won't breed where their own kind is already crowded
   // (intraspecific competition / territoriality). This is what lets competing species coexist.
-  function crowd(w, a, R) {
+  function crowd(i, R) {
     let n = 0;
-    for (let y = Math.max(0, a.y - R); y <= Math.min(H - 1, a.y + R); y++)
-      for (let x = Math.max(0, a.x - R); x <= Math.min(W - 1, a.x + R); x++) {
-        const o = w.occ[y * W + x];
-        if (o && o !== a && o.sp === a.sp) n++;
+    const sp = SPA[i];
+    for (let yy = Math.max(0, Y[i] - R); yy <= Math.min(H - 1, Y[i] + R); yy++)
+      for (let xx = Math.max(0, X[i] - R); xx <= Math.min(W - 1, X[i] + R); xx++) {
+        const j = OCC[yy * W + xx];
+        if (j >= 0 && j !== i && SPA[j] === sp) n++;
       }
     return n;
   }
-
-  // ---------- thinking: a snapshot of the day, decided by THINK (on 1 or more threads) ----------
-  // The master (this code) owns the animals. Each day it copies what thinking needs into typed
-  // arrays and lists the animals due to think; a "thinker" (the Web Worker pool, when the
-  // browser allows shared memory) shares those decisions out between threads. Without one,
-  // the same THINK code runs here, so results never depend on the number of threads.
-  THINK.setup({ species: SPECIES, W, H, CH });
-  const SNAP_CAP = MAX_ANIMALS + 16;
-  let SNAP = null, thinker = null, snapCoverOf = null, thinkGen = 0;
-  // Optional timing (GOL.prof.on = true): where each day's time goes, for tuning multicore.
-  const prof = { on: false, days: 0, snap: 0, think: 0, loop: 0, pre: 0, inline: 0 };
-  function ensureSnap() {
-    if (SNAP) return;
-    const { bytes } = THINK.layout(SNAP_CAP, N);
-    const buf = thinker ? thinker.alloc(bytes) : new ArrayBuffer(bytes);
-    SNAP = THINK.views(buf, SNAP_CAP, N);
-    THINK.bind(SNAP);
-    if (thinker) thinker.attach(buf, SNAP_CAP, N);
-    snapCoverOf = null; snapN = 0;
-  }
-  function setThinker(t) { thinker = t || null; SNAP = null; ensureSnap(); }
-  // ahead = true (the morning snapshot): record each animal as update() will see it when it
-  // thinks, i.e. after this day's ageing, energy cost and countdowns. Inline rows are already live.
-  function snapRow(S, a, k, ahead) {
-    S.x[k] = a.x; S.y[k] = a.y; S.sp[k] = a.sp; S.male[k] = a.male ? 1 : 0; S.life[k] = a.life; S.id[k] = a.id;
-    if (ahead) {
-      const P = SPECIES[a.sp], age = a.age + 1;
-      S.age[k] = age;
-      S.energy[k] = a.energy - P.metab * (age < P.mature ? 0.75 : 1) * (a.preg > 0 ? 1.15 : 1);
-      S.preg[k] = a.preg > 0 ? a.preg - 1 : 0; S.cd[k] = a.cd > 0 ? a.cd - 1 : 0;
-      S.atk[k] = a.atk > 0 ? a.atk - 1 : 0; S.alert[k] = a.alert > 0 ? a.alert - 1 : 0;
-    } else {
-      S.age[k] = a.age; S.energy[k] = a.energy; S.preg[k] = a.preg; S.cd[k] = a.cd; S.atk[k] = a.atk; S.alert[k] = a.alert;
+  // Predators pick the best expected meal per distance, but "switch" toward whatever prey is
+  // common around them (a search image), so rare prey get a refuge.
+  const candI = new Int32Array(1024), candS = new Float64Array(1024), cnt = [0, 0, 0];
+  function bestPrey(i, S) {
+    const R = S.sight, ax = X[i], ay = Y[i];
+    const x0 = Math.max(0, ax - R), x1 = Math.min(W - 1, ax + R), y0 = Math.max(0, ay - R), y1 = Math.min(H - 1, ay + R);
+    if (!anyInBox(x0, y0, x1, y1, PREY_MASK)) return -1;
+    let nc = 0; cnt[0] = cnt[1] = cnt[2] = 0;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const j = OCC[yy * W + xx];
+      if (j < 0 || SPA[j] > 2) continue;
+      const P = SPECIES[SPA[j]];
+      if (P.hides && COVER[yy * W + xx] && Math.max(Math.abs(xx - ax), Math.abs(yy - ay)) > 3) continue;
+      cnt[SPA[j]]++;
+      const p = catchProb(i, j);
+      const ev = p * P.food * (AGE[j] < P.mature ? 0.5 : 1) - (1 - p) * (2 + P.counter * P.counterDmg);
+      if (ev <= 0 || nc >= 1024) continue;
+      const dx = xx - ax, dy = yy - ay;
+      candI[nc] = j; candS[nc] = ev / (Math.sqrt(dx * dx + dy * dy) + 3); nc++;
     }
-  }
-  let snapN = 0;   // rows in yesterday's snapshot
-  function snapshot(w) {
-    ensureSnap();
-    const S = SNAP, A = w.animals, n = A.length, occ = S.occ, due = S.due;
-    if (snapCoverOf !== w) { S.cover.set(w.cover); occ.fill(-1); snapCoverOf = w; }
-    else for (let k = 0; k < snapN; k++) { const c = S.y[k] * W + S.x[k]; if (occ[c] === k) occ[c] = -1; }   // clear only yesterday's cells
-    const ch = w.chunks;   // where each species is (coarse grid), counted in the same pass
-    ch.fill(0);
-    let d = 0;
-    for (let k = 0; k < n; k++) {
-      const a = A[k];
-      a._i = k; occ[a.y * W + a.x] = k; snapRow(S, a, k, true);
-      ch[a.sp * CN + ((a.y / CH) | 0) * CW + ((a.x / CH) | 0)]++;
-      if (a.think <= 1) due[d++] = k;   // update() decrements first
+    const tot = cnt[0] + cnt[1] + cnt[2];
+    let best = -1, bs = 0;
+    for (let k = 0; k < nc; k++) {
+      const share = cnt[SPA[candI[k]]] / tot, sc = candS[k] * share * share;
+      if (sc > bs) { bs = sc; best = candI[k]; }
     }
-    S.chunks.set(ch);
-    for (let k = 0; k < n; k++) { const m = A[k].mom; S.mom[k] = m && m.alive && A[m._i] === m ? m._i : -1; }
-    S.meta[0] = w.tick; S.meta[1] = w.seed | 0; S.meta[2] = ++thinkGen;
-    snapN = n;
-    return d;
+    return best;
   }
-  function runThinking(nd, side) {
-    if (thinker && thinker.run(nd, side)) return;
-    side();
-    for (let k = 0; k < nd; k++) THINK.decide(SNAP.due[k]);
-  }
-  // Grass regrowth (slow when nearly bare: overgrazing hurts). Thinking never reads grass.
-  function regrow(w, si) {
-    const base = 0.035 * si.factor * w.rain;
-    const g = w.grass, f = w.fert, cap = w.cap, ter = w.terrain;
-    let gsum = 0;
-    for (let i = 0; i < N; i++) {
-      if (ter[i] !== T_GRASS) continue;
-      const c = cap[i], v = g[i];
-      if (v < c) { const nv = v + base * f[i] * (0.3 + v) * (1 - v / c); g[i] = nv > c ? c : nv; }
-      else if (v > c) g[i] = c;
-      gsum += g[i];
+  function decide(i, mode, t) { MODE[i] = mode; setTgt(i, t); }
+  function thinkPrey(i, S) {
+    if (S.flees || ALERT[i] > 0) {
+      const t = findNearest(i, S.sight + (ALERT[i] > 0 ? 2 : 0), PRED_MASK, Q_GROWN);
+      if (t >= 0) return decide(i, M.flee, t);
     }
-    w.avgGrass = gsum / Math.max(1, w.landCells);
-  }
-  // Apply animal k's decision. Animals that had to think unexpectedly (an alarm, a lost target)
-  // refresh their own row and decide here on the master.
-  function think(w, a, k, S) {
-    let t = -1;
-    if (SNAP.doneGen[k] === thinkGen && !a.rethink) {   // decided this morning (maybe by a helper)
-      t = SNAP.outTgt[k];
-      if (t < 0 || w.animals[t].alive) { a.mode = THINK.MODES[SNAP.outMode[k]]; a.tgt = t >= 0 ? w.animals[t] : null; return; }
+    if (ready(i, S) && (MALE[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
+      const m = findNearest(i, S.sight * 2, 1 << SPA[i], Q_MATE);
+      if (m >= 0) return decide(i, M.mate, m);
     }
-    // Something changed since the morning (alarm, lost target): decide now from the live map.
-    a.rethink = false;
-    if (prof.on) prof.inline++;
-    snapRow(SNAP, a, k, false); THINK.decide(k);
-    a.mode = THINK.MODES[SNAP.outMode[k]];
-    t = SNAP.outTgt[k];
-    a.tgt = t >= 0 && w.animals[t].alive ? w.animals[t] : null;
-    if (t >= 0 && !a.tgt) a.mode = S.isPrey ? 'graze' : 'search';
+    decide(i, M.graze, -1);
+  }
+  function thinkPred(i, S) {
+    const sp = SPA[i], juv = AGE[i] < S.mature, ef = EN[i] / S.maxE, rival = sp === 3 ? 4 : 3;
+    if (sp === 4) {   // cheetahs avoid grown lions
+      const l = findNearest(i, 4, 1 << 3, Q_GROWN);
+      if (l >= 0) return decide(i, M.flee, l);
+    }
+    const mom = MOM[i];
+    if (juv && AGE[i] < S.mature * 0.6 && mom >= 0 && ALIVE[mom] && ID[mom] === MOMID[i]) return decide(i, M.follow, mom);
+    if (!juv && rand() < S.aggression) {
+      // Lions attack cheetahs; cheetahs pick on unguarded lion cubs.
+      const t = findNearest(i, 5, 1 << rival, sp === 3 ? Q_ANY : Q_CUB);
+      if (t >= 0) return decide(i, M.attack, t);
+    }
+    if (ef < S.hungerAt && ATK[i] === 0) {
+      const p = bestPrey(i, S);
+      return p >= 0 ? decide(i, M.hunt, p) : decide(i, M.search, -1);
+    }
+    if (ready(i, S) && (MALE[i] || crowd(i, S.crowdR) <= S.crowdMax)) {
+      const m = findNearest(i, S.sight * 3, 1 << sp, Q_MATE);
+      return m >= 0 ? decide(i, M.mate, m) : decide(i, M.wander, -1);
+    }
+    decide(i, M.rest, -1);
   }
 
-  function moveStep(w, a) {
-    const mode = a.mode, t = a.tgt, r = w.rand, g = w.grass, occ = w.occ, ter = w.terrain;
-    const ci = a.y * W + a.x;
-    if (t) {
-      const d = cheb(a, t);
-      if ((mode === 'hunt' || mode === 'attack' || mode === 'mate') && d <= 1) return false;
-      if (mode === 'follow' && d <= 2 && r() < 0.7) return false;
+  function moveStep(s) {
+    const mode = MODE[s], t = tgtOf(s), ci = Y[s] * W + X[s], sx = X[s], sy = Y[s];
+    if (t >= 0) {
+      const d = cheb(s, t);
+      if ((mode === M.hunt || mode === M.attack || mode === M.mate) && d <= 1) return false;
+      if (mode === M.follow && d <= 2 && rand() < 0.7) return false;
     }
-    if (mode === 'rest' && r() > 0.12) return false;
-    if (mode === 'graze' && g[ci] > 0.25 && r() < 0.85) return false;
+    if (mode === M.rest && rand() > 0.12) return false;
+    if (mode === M.graze && GRASS[ci] > 0.25 && rand() < 0.85) return false;
+    const hides = SPECIES[SPA[s]].hides;
     let best = -1e9, bx = -1, by = -1;
     for (let k = 0; k < 8; k++) {
-      const dx = D8[k][0], dy = D8[k][1], nx = a.x + dx, ny = a.y + dy;
+      const dx = D8X[k], dy = D8Y[k], nx = sx + dx, ny = sy + dy;
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
       const ni = ny * W + nx;
-      if (ter[ni] !== T_GRASS || occ[ni] !== null) continue;
-      let s = r() * 0.3;
-      if (t) {
-        const ex = nx - t.x, ey = ny - t.y, dist = Math.sqrt(ex * ex + ey * ey);
-        s += mode === 'flee' ? dist * 1.5 + g[ni] * 0.3 + (w.cover[ni] && SPECIES[a.sp].hides ? 2 : 0) : -dist;
-      } else if (mode === 'graze') {
-        s += g[ni] * 2 + (dx * a.hx + dy * a.hy) * 0.15;
+      if (TER[ni] !== T_GRASS || OCC[ni] >= 0) continue;
+      let sc = rand() * 0.3;
+      if (t >= 0) {
+        const ex = nx - X[t], ey = ny - Y[t], dist = Math.sqrt(ex * ex + ey * ey);
+        sc += mode === M.flee ? dist * 1.5 + GRASS[ni] * 0.3 + (COVER[ni] && hides ? 2 : 0) : -dist;
+      } else if (mode === M.graze) {
+        sc += GRASS[ni] * 2 + (dx * HX[s] + dy * HY[s]) * 0.15;
       } else {
-        s += (dx * a.hx + dy * a.hy) * 0.6;
+        sc += (dx * HX[s] + dy * HY[s]) * 0.6;
       }
-      if (s > best) { best = s; bx = nx; by = ny; }
+      if (sc > best) { best = sc; bx = nx; by = ny; }
     }
-    if (bx < 0) { newHeading(a, r); return false; }
-    if (!t && r() < 0.06) newHeading(a, r);
-    occ[ci] = null; occ[by * W + bx] = a;
-    if (a._i >= 0 && SNAP.occ[ci] === a._i) { SNAP.occ[ci] = -1; SNAP.occ[by * W + bx] = a._i; SNAP.x[a._i] = bx; SNAP.y[a._i] = by; }
-    if (bx !== a.x) a.face = bx > a.x ? 1 : -1;
-    a.x = bx; a.y = by;
+    if (bx < 0) { newHeading(s); return false; }
+    if (t < 0 && rand() < 0.06) newHeading(s);
+    OCC[ci] = -1; OCC[by * W + bx] = s;
+    if (bx !== sx) FACE[s] = bx > sx ? 1 : -1;
+    X[s] = bx; Y[s] = by;
     return true;
   }
 
-  function update(w, a, k) {
-    const S = SPECIES[a.sp], r = w.rand;
-    a.age++;
-    if (a.age >= a.life) { die(w, a, 'age'); return; }
-    const juv = a.age < S.mature;
-    a.energy -= S.metab * (juv ? 0.75 : 1) * (a.preg > 0 ? 1.15 : 1);
-    if (a.energy <= 0) { die(w, a, 'starve'); return; }
-    if (a.cd > 0) a.cd--;
-    if (a.atk > 0) a.atk--;
-    if (a.alert > 0) a.alert--;
-    if (a.preg > 0 && --a.preg === 0) giveBirth(w, a);
-    if (a.tgt && !a.tgt.alive) { a.tgt = null; a.think = 0; a.rethink = true; }
-    if (--a.think <= 0) { think(w, a, k, S); a.think = 2 + ((r() * 3) | 0); }
-    a.acc += S.speed;
-    while (a.acc >= 1) {
-      a.acc -= 1;
-      if (!moveStep(w, a)) break;
-      a.energy -= S.moveCost;
-      if (a.tgt && a.mode === 'hunt' && cheb(a, a.tgt) <= 1) break;
+  function update(s) {
+    const sp = SPA[s], S = SPECIES[sp];
+    AGE[s]++;
+    if (AGE[s] >= LIFE[s]) { die(s, 2); return; }
+    const juv = AGE[s] < S.mature;
+    EN[s] -= S.metab * (juv ? 0.75 : 1) * (PREG[s] > 0 ? 1.15 : 1);
+    if (EN[s] <= 0) { die(s, 1); return; }
+    if (CD[s] > 0) CD[s]--;
+    if (ATK[s] > 0) ATK[s]--;
+    if (ALERT[s] > 0) ALERT[s]--;
+    if (PREG[s] > 0 && --PREG[s] === 0) giveBirth(s);
+    if (TGT[s] >= 0 && tgtOf(s) < 0) { TGT[s] = -1; THINKC[s] = 0; }
+    if (--THINKC[s] <= 0) {
+      RETH[s] = 0;
+      if (S.isPrey) thinkPrey(s, S); else thinkPred(s, S);
+      THINKC[s] = 2 + ((rand() * 3) | 0);
     }
+    ACC[s] += S.speed;
+    while (ACC[s] >= 1) {
+      ACC[s] -= 1;
+      if (!moveStep(s)) break;
+      EN[s] -= S.moveCost;
+      const t = tgtOf(s);
+      if (t >= 0 && MODE[s] === M.hunt && cheb(s, t) <= 1) break;
+    }
+    // Unused movement doesn't pile up (no sprinting 70 tiles after a long rest): keep only the
+    // fraction. This also caps every animal at its real speed, which the strip layout relies on.
+    if (ACC[s] >= 1) ACC[s] -= Math.floor(ACC[s]);
     // Chases are tiring: a predator that can't close in soon gives up and rests.
     if (!S.isPrey) {
-      if (a.mode === 'hunt' && a.tgt && cheb(a, a.tgt) > 1) {
-        if (++a.chase > S.chase) { a.chase = 0; a.atk = S.recover * 2; a.mode = 'rest'; a.tgt = null; a.think = 6; }
-      } else a.chase = 0;
+      const t = tgtOf(s);
+      if (MODE[s] === M.hunt && t >= 0 && cheb(s, t) > 1) {
+        if (++CHASE[s] > S.chase) { CHASE[s] = 0; ATK[s] = S.recover * 2; MODE[s] = M.rest; setTgt(s, -1); THINKC[s] = 6; }
+      } else CHASE[s] = 0;
     }
     if (S.isPrey) {
-      const i = a.y * W + a.x;
-      if (a.energy < S.maxE) {
-        const v = w.grass[i];
+      const i = Y[s] * W + X[s];
+      if (EN[s] < S.maxE) {
+        const v = GRASS[i];
         // grazing functional response: short grass yields much less per bite
         const amt = Math.min(v - 0.04, S.bite * (juv ? 0.6 : 1) * v / (v + 0.4));
-        if (amt > 0) { w.grass[i] -= amt; a.energy = Math.min(S.maxE, a.energy + amt * S.gain); }
+        if (amt > 0) { GRASS[i] = v - amt; EN[s] = Math.min(S.maxE, EN[s] + amt * S.gain); }
       }
-      if (a.mode === 'mate' && a.tgt && cheb(a, a.tgt) <= 1) tryMate(w, a, a.tgt);
+      const t = tgtOf(s);
+      if (MODE[s] === M.mate && t >= 0 && cheb(s, t) <= 1) tryMate(s, t);
     } else {
-      const t = a.tgt;
-      if (t && t.alive && cheb(a, t) <= 1) {
-        if (a.mode === 'hunt') attack(w, a, t);
-        else if (a.mode === 'attack') fight(w, a, t);
-        else if (a.mode === 'mate') tryMate(w, a, t);
+      const t = tgtOf(s);
+      if (t >= 0 && cheb(s, t) <= 1) {
+        if (MODE[s] === M.hunt) attack(s, t);
+        else if (MODE[s] === M.attack) fight(s, t);
+        else if (MODE[s] === M.mate) tryMate(s, t);
       }
       // chance encounter: a grown lion next to a cheetah may start a fight
-      if (a.alive && a.sp === 3 && !juv && a.atk === 0 && r() < 0.03) {
-        const c = adjacentOf(w, a, 4);
-        if (c) fight(w, a, c);
+      if (ALIVE[s] && sp === 3 && !juv && ATK[s] === 0 && rand() < 0.03) {
+        const c = adjacentOf(s, 4);
+        if (c >= 0) fight(s, c);
       }
     }
   }
 
-  function recount(w) {
-    const c = w.counts, m = w.males, j = w.juveniles;
-    for (let s = 0; s < 5; s++) { c[s] = 0; m[s] = 0; j[s] = 0; }
-    for (const a of w.animals) {
-      if (!a.alive) continue;
-      c[a.sp]++;
-      if (a.male) m[a.sp]++;
-      if (a.age < SPECIES[a.sp].mature) j[a.sp]++;
+  // ---------- parallel tasks (run on the page or in a worker; views must be bound) ----------
+  // params: [0] day, [1] seed, [2] grass growth factor, [3] which colour of strips goes first
+  function regrowBand(b) {
+    const base = 0.035 * PARAMS[2];
+    const y0 = (b * H / BANDS) | 0, y1 = ((b + 1) * H / BANDS) | 0;
+    let gsum = 0;
+    for (let i = y0 * W; i < y1 * W; i++) {
+      if (TER[i] !== T_GRASS) continue;
+      const c = CAPG[i], v = GRASS[i];
+      if (v < c) { const nv = v + base * FERT[i] * (0.3 + v) * (1 - v / c); GRASS[i] = nv > c ? c : nv; }
+      else if (v > c) GRASS[i] = c;
+      gsum += GRASS[i];
     }
+    GSUM[b] = gsum;
+  }
+  function runStrip(strip) {
+    CUR = strip;
+    RS = mix(PARAMS[1] | 0, PARAMS[0] | 0, strip + 1);
+    IDNEXT = PARAMS[0] * 1e6 + strip * 1e5 + 1;   // ids born today in this strip
+    const st = SSTART[strip], n = SLEN[strip];
+    for (let i = n - 1; i > 0; i--) {   // this strip's own random order for the day
+      const j = (rand() * (i + 1)) | 0, a = SLIST[st + i]; SLIST[st + i] = SLIST[st + j]; SLIST[st + j] = a;
+    }
+    for (let k = 0; k < n; k++) { const s = SLIST[st + k]; if (ALIVE[s]) update(s); }
+    CUR = -1;
+  }
+  // task numbering for a day: 0..15 grass bands, 16..19 first colour strips, 20..23 second colour
+  const PHASES = [{ from: 0, n: BANDS }, { from: BANDS, n: NS / 2 }, { from: BANDS + NS / 2, n: NS / 2 }];
+  function runTask(t) {
+    if (t < BANDS) return regrowBand(t);
+    const k = t - BANDS, first = PARAMS[3] | 0;
+    const color = k < NS / 2 ? first : 1 - first;
+    runStrip(((k % (NS / 2)) * 2) + color);
   }
 
+  // ---------- the day, coordinated from the page ----------
+  let runner = null;   // multicore pool (see the page); null = run every task here
+  function setRunner(r) { runner = r || null; }
   function step(w) {
+    bindViews(w.v);
     w.tick++;
     const si = seasonInfo(w);
-    const A = w.animals, ch = w.chunks;
-    if (thinker && thinker.prewake && A.length > 200) thinker.prewake();   // helpers wake while we build the snapshot
-    for (let i = A.length - 1; i > 0; i--) { const j = (w.rand() * (i + 1)) | 0; const t = A[i]; A[i] = A[j]; A[j] = t; }
-    const p0 = prof.on ? performance.now() : 0;
-    const nd = snapshot(w);
-    const p1 = prof.on ? performance.now() : 0;
-    runThinking(nd, () => regrow(w, si));   // grass regrows on the master while helpers think
-    const p2 = prof.on ? performance.now() : 0;
-    const n = A.length;
-    for (let k = 0; k < n; k++) { const a = A[k]; if (a.alive) update(w, a, k); }
-    if (prof.on) { const p3 = performance.now(); prof.days++; prof.snap += p1 - p0; prof.think += p2 - p1; prof.loop += p3 - p2; prof.pre += nd; }
-    // Drop the dead and recount the living in one pass.
-    const c = w.counts, ml = w.males, jv = w.juveniles;
-    for (let s = 0; s < 5; s++) { c[s] = 0; ml[s] = 0; jv[s] = 0; }
-    let wi = 0;
-    for (let k = 0; k < A.length; k++) {
-      const a = A[k];
-      if (!a.alive) continue;
-      A[wi++] = a;
-      c[a.sp]++;
-      if (a.male) ml[a.sp]++;
-      if (a.age < SPECIES[a.sp].mature) jv[a.sp]++;
+    // 1. who is where: strip lists and the coarse species map
+    CHUNKS.fill(0);
+    const live = w.live, n = w.liveN;
+    const cnt8 = new Int32Array(NS);
+    for (let k = 0; k < n; k++) { const s = live[k]; cnt8[(X[s] / SW) | 0]++; CHUNKS[SPA[s] * CN + ((Y[s] / CH) | 0) * CW + ((X[s] / CH) | 0)]++; }
+    let off = 0;
+    for (let st = 0; st < NS; st++) { SSTART[st] = off; off += cnt8[st]; SLEN[st] = 0; }
+    for (let k = 0; k < n; k++) { const s = live[k], st = (X[s] / SW) | 0; SLIST[SSTART[st] + SLEN[st]++] = s; }
+    // 2. newborn slots: an equal share for every strip, within the world's animal limit
+    releaseQuarantine(w);
+    const room = Math.max(0, Math.min(w.freeList.length, MAX_ANIMALS - n));
+    const share = Math.min(FREE_PER_STRIP, Math.floor(room / NS));
+    for (let st = 0; st < NS; st++) {
+      for (let k = 0; k < share; k++) FREE[st * FREE_PER_STRIP + k] = w.freeList.pop();
+      FLEN[st] = share; FUSED[st] = 0; EVLEN[st] = 0;
     }
-    A.length = wi;
-    for (let s = 0; s < 5; s++) {
-      if (w.prevCounts[s] > 0 && w.counts[s] === 0) { w.extinctAt[s] = w.tick; emit(w, { t: 'extinct', sp: s }); }
-      w.prevCounts[s] = w.counts[s];
+    STATS.fill(0);
+    PARAMS[0] = w.tick; PARAMS[1] = w.seed | 0; PARAMS[2] = si.factor * w.rain; PARAMS[3] = w.tick & 1;
+    // 3. the parallel phases
+    for (const ph of PHASES) {
+      if (!(runner && runner.run(w, ph.from, ph.n))) for (let t = ph.from; t < ph.from + ph.n; t++) runTask(t);
     }
-    if (si.name !== w.seasonName) { w.seasonName = si.name; emit(w, { t: 'season', name: si.name }); }
-    if (w.tick % YEAR === 0) emit(w, { t: 'year', year: w.tick / YEAR + 1 });
+    bindViews(w.v);
+    endOfDay(w, si);
+  }
+  function releaseQuarantine(w) {
+    const q = w.quarantine;
+    let k = 0;
+    while (k < q.length && q[k].day <= w.tick - QUARANTINE) { w.freeList.push(q[k].slot); k++; }
+    if (k) q.splice(0, k);
+  }
+  function endOfDay(w, si) {
+    // unused newborn slots go back (in order, so the next day is the same on any machine)
+    for (let st = NS - 1; st >= 0; st--) for (let k = FLEN[st] - 1; k >= FUSED[st]; k--) w.freeList.push(FREE[st * FREE_PER_STRIP + k]);
+    // statistics and events, strip by strip
+    for (let st = 0; st < NS; st++) {
+      const b = st * STATN;
+      for (let sp = 0; sp < 5; sp++) {
+        w.births[sp] += STATS[b + sp]; w.kills[sp] += STATS[b + 5 + sp];
+        const d = w.deaths[sp];
+        d.eaten += STATS[b + 10 + sp * 4]; d.starve += STATS[b + 11 + sp * 4]; d.age += STATS[b + 12 + sp * 4]; d.fight += STATS[b + 13 + sp * 4];
+      }
+      w.fights += STATS[b + 30];
+      for (let e = 0; e < EVLEN[st]; e++) w.events.length < 4000 && w.events.push(eventObj(st, e));
+    }
+    let gsum = 0;
+    for (let b = 0; b < BANDS; b++) gsum += GSUM[b];
+    w.avgGrass = gsum / Math.max(1, w.landCells);
+    // the living: yesterday's list plus today's newborns (strip order); the dead wait in quarantine
+    const live = w.live, n = w.liveN, next = new Int32Array(CAP);
+    let m = 0;
+    for (let k = 0; k < n; k++) { const s = live[k]; if (ALIVE[s]) next[m++] = s; else w.quarantine.push({ slot: s, day: w.tick }); }
+    for (let st = 0; st < NS; st++) for (let k = 0; k < FUSED[st]; k++) {
+      const s = FREE[st * FREE_PER_STRIP + k];
+      if (ALIVE[s]) next[m++] = s; else w.quarantine.push({ slot: s, day: w.tick });
+    }
+    w.live = next; w.liveN = m;
+    // Lost sight: drop targets and mothers more than 26 tiles away (the animal decides again
+    // tomorrow). This keeps every animal's reads within one strip of itself, which is what lets
+    // strips of the same colour run at the same time without touching each other's animals.
+    for (let k = 0; k < m; k++) {
+      const s = next[k], t = TGT[s], mo = MOM[s];
+      if (t >= 0 && ALIVE[t] && cheb(s, t) > 26) { TGT[s] = -1; THINKC[s] = 0; }
+      if (mo >= 0 && ALIVE[mo] && cheb(s, mo) > 26) MOM[s] = -1;
+    }
+    recount(w);
+    for (let sp = 0; sp < 5; sp++) {
+      if (w.prevCounts[sp] > 0 && w.counts[sp] === 0) { w.extinctAt[sp] = w.tick; w.events.push({ t: 'extinct', sp }); }
+      w.prevCounts[sp] = w.counts[sp];
+    }
+    if (si.name !== w.seasonName) { w.seasonName = si.name; w.events.push({ t: 'season', name: si.name }); }
+    if (w.tick % YEAR === 0) w.events.push({ t: 'year', year: w.tick / YEAR + 1 });
     if (w.tick % SAMPLE_EVERY === 0) {
       const h = w.hist, k = h.len % HIST_CAP;
-      for (let s = 0; s < 5; s++) h.data[s][k] = w.counts[s];
+      for (let sp = 0; sp < 5; sp++) h.data[sp][k] = w.counts[sp];
       h.grass[k] = w.avgGrass;
       h.len++;
     }
   }
-
-  function inject(w, sp, x, y) {
-    const S = SPECIES[sp], r = w.rand;
-    if (w.animals.length >= MAX_ANIMALS - 1) return null;
-    const c1 = findFreeNear(w, x, y, 5);
-    if (!c1) return null;
-    const ageOf = () => Math.floor(Math.min(S.life[0] * 0.5, S.mature * (1 + r() * 0.3)));
-    const m = makeAnimal(w, sp, true, c1.x, c1.y, ageOf(), 0.9);
-    const c2 = findFreeNear(w, c1.x, c1.y, 3);
-    if (!c2) { w.occ[c1.y * W + c1.x] = null; w.animals.pop(); return null; }
-    const f = makeAnimal(w, sp, false, c2.x, c2.y, ageOf(), 0.9);
-    m.injected = f.injected = true;
-    m.think = f.think = 0;
-    w.injected[sp]++;
-    w.counts[sp] += 2; w.males[sp] += 1;
-    w.chunks[sp * CN + ((c1.y / CH) | 0) * CW + ((c1.x / CH) | 0)]++;
-    w.chunks[sp * CN + ((c2.y / CH) | 0) * CW + ((c2.x / CH) | 0)]++;
-    emit(w, { t: 'inject', sp, x: c1.x, y: c1.y, x2: c2.x, y2: c2.y });
-    return [m, f];
+  function eventObj(st, e) {
+    const o = (st * EV_CAP + e) * EV_F, type = EV[o], sp = EV[o + 1], x = EV[o + 2], y = EV[o + 3], a = EV[o + 4], b = EV[o + 5], c = EV[o + 6];
+    switch (type) {
+      case E_DEATH: return { t: 'death', sp, x, y, cause: CAUSES[a] };
+      case E_KILL: return { t: 'kill', sp, prey: a, x, y };
+      case E_GORE: return { t: 'gore', sp, x, y };
+      case E_FIGHT: return { t: 'fight', x, y, win: a, lose: b, killed: !!c };
+      case E_MATE: return { t: 'mate', sp, x, y };
+      default: return { t: 'birth', sp, x, y, n: a, fam: b };
+    }
+  }
+  function recount(w) {
+    bindViews(w.v);
+    const c = w.counts, ml = w.males, j = w.juveniles;
+    for (let s = 0; s < 5; s++) { c[s] = 0; ml[s] = 0; j[s] = 0; }
+    for (let k = 0; k < w.liveN; k++) {
+      const s = w.live[k], sp = SPA[s];
+      c[sp]++;
+      if (MALE[s]) ml[sp]++;
+      if (AGE[s] < SPECIES[sp].mature) j[sp]++;
+    }
   }
 
+  // Release a male + female couple near (x, y), on the page between days. Returns their slots.
+  function inject(w, sp, x, y) {
+    if (w.liveN >= MAX_ANIMALS - 1) return null;
+    return serial(w, () => {
+      const S = SPECIES[sp];
+      const c1 = findFreeNear(x, y, 5);
+      if (c1 < 0) return null;
+      const ageOf = () => Math.floor(Math.min(S.life[0] * 0.5, S.mature * (1 + rand() * 0.3)));
+      const m = makeAnimal(sp, true, c1 % W, (c1 / W) | 0, ageOf(), 0.9);
+      if (m < 0) return null;
+      const c2 = findFreeNear(X[m], Y[m], 3);
+      if (c2 < 0) { ALIVE[m] = 0; OCC[c1] = -1; w.freeList.push(m); return null; }
+      const f = makeAnimal(sp, false, c2 % W, (c2 / W) | 0, ageOf(), 0.9);
+      if (f < 0) { ALIVE[m] = 0; OCC[c1] = -1; w.freeList.push(m); return null; }
+      INJ[m] = INJ[f] = 1; THINKC[m] = THINKC[f] = 0;
+      w.live[w.liveN++] = m; w.live[w.liveN++] = f;
+      w.injected[sp]++;
+      w.counts[sp] += 2; w.males[sp] += 1;
+      w.events.push({ t: 'inject', sp, x: X[m], y: Y[m], x2: X[f], y2: Y[f] });
+      return [m, f];
+    });
+  }
+
+  // ---------- reading animals from the page ----------
+  // A handle is { slot, id }: valid while that slot still holds that animal (alive, or recently dead).
+  function handle(w, slot) { return { slot, id: w.v.id[slot] }; }
+  function same(w, h) { return !!h && w.v.id[h.slot] === h.id && h.id > 0; }
+  function read(w, slot) {
+    const v = w.v, s = slot;
+    return { slot: s, id: v.id[s], alive: !!v.alive[s], sp: v.sp[s], male: !!v.male[s], x: v.x[s], y: v.y[s], age: v.age[s],
+      energy: v.energy[s], preg: v.preg[s], atk: v.atk[s], life: v.life[s], gen: v.gen[s], injected: !!v.injected[s],
+      mode: MODES[v.mode[s]], cause: CAUSES[v.cause[s]], by: v.by[s], fam: v.fam[s], named: !!v.named[s] };
+  }
+  // A fingerprint of the whole world, for checking that every thread count gives the same result.
+  function hash(w) {
+    const v = w.v;
+    let h = w.liveN | 0;
+    for (let k = 0; k < w.liveN; k++) {
+      const s = w.live[k];
+      h = (Math.imul(h, 31) + (v.id[s] % 2147483647) * 7 + v.x[s] * 131 + v.y[s] * 977 + Math.round(v.energy[s] * 100)) | 0;
+    }
+    return h;
+  }
   function shannon(counts) {
     let tot = 0; for (const c of counts) tot += c;
     if (!tot) return 0;
@@ -1319,8 +1332,10 @@ const GOL = (() => {
     return h;
   }
 
-  return { W, H, N, YEAR, SPECIES, CAUSES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY, MAX_ANIMALS,
-    CH, prof, createWorld, step, inject, seasonInfo, shannon, catchProb, setThinker };
+  return { W, H, N, YEAR, SPECIES, CAUSES, MODES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY, MAX_ANIMALS,
+    CH, NS, CAP, layout, viewsOf, bindViews, runTask,
+    setAllocator, setRunner, createWorld, step, inject, seasonInfo, shannon, handle, same, read,
+    rand: w => serial(w, rand), hash };
 })();
 if (typeof module !== 'undefined') module.exports = GOL;
 </script>
@@ -1440,78 +1455,87 @@ const storage = {
   set(k, v) { try { localStorage.setItem('gol.' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
 };
 
-// ---------------- multicore: one master thread + helper (slave) workers ----------------
-// The master (this page) runs the simulation. Each day the animals' decisions ("thinking", about
-// half the work) are shared out to helper Web Workers through shared memory (see THINK in
-// think-core). Needs cross-origin isolation (coi-sw.js); otherwise everything runs here.
+// ---------------- multicore: the page plus helper Web Workers ----------------
+// The world lives in shared memory. Each day's three phases (grass bands, then each colour of map
+// strips, see sim-core) are shared between the page and helper workers, which take tasks from a
+// shared counter. Needs cross-origin isolation (coi-sw.js); otherwise everything runs here.
 const Pool = (() => {
   const cores = navigator.hardwareConcurrency || 2;
   const ok = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true &&
     typeof Atomics !== 'undefined' && typeof Worker !== 'undefined' && cores >= 2;
-  if (!ok) return { available: false, cores, max: 0, threads: 1, setThreads() {} };
+  if (!ok) return { available: false, cores, max: 0, threads: 1, setThreads() {}, whenReady: () => Promise.resolve() };
   const MAX = Math.max(1, Math.min(15, cores - 1));   // helpers: one per remaining CPU thread (up to 16 threads)
-  const C_ACTIVE = 5, C_WAKE = 6, C_READY = 7;
-  const src = document.getElementById('think-core').textContent + `
+  // control block: generation, next task, end task, check-ins, stop, active helpers, ready, world epoch
+  const C_GEN = 0, C_NEXT = 1, C_END = 2, C_DONE = 3, C_STOP = 4, C_ACTIVE = 5, C_READY = 6, C_EPOCH = 7;
+  const src = document.getElementById('sim-core').textContent + `
+let ctrl = null;
 onmessage = e => {
   const d = e.data;
-  THINK.setup(d.cfg); THINK.bind(THINK.views(d.buf, d.cap, d.n));
-  const ctrl = new Int32Array(d.ctrl);
-  let seen = Atomics.load(ctrl, THINK.C_GEN), wseen = Atomics.load(ctrl, ${C_WAKE});
+  if (d.ctrl) ctrl = new Int32Array(d.ctrl);
+  GOL.bindViews(GOL.viewsOf(d.buf));   // the world this helper works on
+  let seen = Atomics.load(ctrl, ${C_GEN});
   Atomics.add(ctrl, ${C_READY}, 1);
   for (;;) {
-    // Sleep until the master says a day is coming (WAKE), then spin briefly until it starts (GEN).
-    while (Atomics.load(ctrl, THINK.C_GEN) === seen) {
-      if (Atomics.load(ctrl, ${C_WAKE}) !== wseen) {
-        wseen = Atomics.load(ctrl, ${C_WAKE});
-        const t0 = performance.now();
-        while (Atomics.load(ctrl, THINK.C_GEN) === seen && performance.now() - t0 < 4) { /* spin */ }
-      } else Atomics.wait(ctrl, ${C_WAKE}, wseen, 50);
+    // Spin briefly (phases follow each other closely), then sleep until the next phase.
+    const t0 = performance.now();
+    while (Atomics.load(ctrl, ${C_GEN}) === seen && performance.now() - t0 < 0.3) { /* spin */ }
+    if (Atomics.load(ctrl, ${C_GEN}) === seen) Atomics.wait(ctrl, ${C_GEN}, seen);
+    seen = Atomics.load(ctrl, ${C_GEN});
+    if (Atomics.load(ctrl, ${C_STOP})) return;
+    if (Atomics.load(ctrl, ${C_EPOCH}) !== d.epoch) return;   // a new world: go and read its message
+    if (d.idx < Atomics.load(ctrl, ${C_ACTIVE})) {
+      for (;;) { const t = Atomics.add(ctrl, ${C_NEXT}, 1); if (t >= Atomics.load(ctrl, ${C_END})) break; GOL.runTask(t); }
     }
-    seen = Atomics.load(ctrl, THINK.C_GEN);
-    if (Atomics.load(ctrl, THINK.C_STOP)) return;
-    if (d.idx < Atomics.load(ctrl, ${C_ACTIVE})) THINK.work(ctrl);
-    wseen = Atomics.load(ctrl, ${C_WAKE});   // this day's wake-up is used up: sleep, don't spin
-    Atomics.add(ctrl, THINK.C_DONE, 1);   // every helper checks in once per day
+    Atomics.add(ctrl, ${C_DONE}, 1);   // every helper checks in once per phase
   }
 };`;
   const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-  let ctrl = null, workers = [], dead = false, active = MAX;
+  const ctrl = new Int32Array(new SharedArrayBuffer(8 * 4));
+  let workers = [], dead = false, active = MAX, boundBuf = null, epoch = 0;
   const P = {
-    available: true, cores, max: MAX, minBatch: 64, lastError: '',
-    alloc: bytes => new SharedArrayBuffer(bytes),
-    attach(buf, cap, n) {
-      for (const wk of workers) wk.terminate();
-      ctrl = new Int32Array(new SharedArrayBuffer(THINK.C_SIZE * 4));
-      Atomics.store(ctrl, C_ACTIVE, active);
-      workers = [];
-      for (let i = 0; i < MAX; i++) {
+    available: true, cores, max: MAX, lastError: '',
+    // Point the helpers at a world's memory. They are created once; later worlds reach them as
+    // messages, which their own threads receive even while the page is busy.
+    attach(buf) {
+      boundBuf = buf; epoch++;
+      Atomics.store(ctrl, C_READY, 0); Atomics.store(ctrl, C_EPOCH, epoch);
+      if (!workers.length) for (let i = 0; i < MAX; i++) {
         const wk = new Worker(url);
         wk.onerror = e => { P.lastError = e.message || 'worker error'; P.fail(); };
-        wk.postMessage({ idx: i, cfg: { species: GOL.SPECIES, W: GOL.W, H: GOL.H, CH: GOL.CH }, buf, cap, n, ctrl: ctrl.buffer });
         workers.push(wk);
       }
+      workers.forEach((wk, i) => wk.postMessage({ idx: i, buf, epoch, ctrl: ctrl.buffer }));
+      Atomics.add(ctrl, C_GEN, 1); Atomics.notify(ctrl, C_GEN);   // wake helpers so they pick it up
+    },
+    ready() { return !dead && workers.length > 0 && Atomics.load(ctrl, C_READY) >= workers.length; },
+    // Resolves once every helper is working on world w (for tests and benchmarks).
+    whenReady(w) {
+      if (dead) return Promise.resolve(false);
+      if (w && boundBuf !== w.buf) P.attach(w.buf);
+      return new Promise(res => { const t0 = performance.now(); (function poll() { if (P.ready() || dead || performance.now() - t0 > 5000) res(P.ready()); else setTimeout(poll, 5); })(); });
     },
     get threads() { return dead ? 1 : active + 1; },
-    setThreads(t) { active = Math.max(0, Math.min(MAX, (t | 0) - 1)); if (ctrl) Atomics.store(ctrl, C_ACTIVE, active); },
-    prewake() { if (!dead && active > 0 && ctrl) { Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE); } },
-    // Returns false when the master should just think alone (few animals, helpers not ready).
-    // side(): master-only work (grass) done while the helpers think.
-    run(count, side) {
-      if (dead || active === 0 || count < P.minBatch || !ctrl || Atomics.load(ctrl, C_READY) < workers.length) return false;
-      Atomics.store(ctrl, THINK.C_COUNT, count); Atomics.store(ctrl, THINK.C_NEXT, 0); Atomics.store(ctrl, THINK.C_DONE, 0);
-      Atomics.add(ctrl, THINK.C_GEN, 1); Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE);
-      if (side) side();
-      THINK.work(ctrl);   // then the master takes a share of the thinking too
+    setThreads(t) { active = Math.max(0, Math.min(MAX, (t | 0) - 1)); Atomics.store(ctrl, C_ACTIVE, active); },
+    stats: { parallel: 0, alone: 0 },
+    // Run tasks [from, from + n) of today's phase on all threads. false = the page runs them alone.
+    run(w, from, n) {
+      if (dead || active === 0 || !(w.buf instanceof SharedArrayBuffer)) { P.stats.alone++; return false; }
+      if (boundBuf !== w.buf) P.attach(w.buf);
+      if (!P.ready()) { P.stats.alone++; return false; }   // helpers still starting: this phase runs here
+      Atomics.store(ctrl, C_NEXT, from); Atomics.store(ctrl, C_END, from + n); Atomics.store(ctrl, C_DONE, 0);
+      Atomics.add(ctrl, C_GEN, 1); Atomics.notify(ctrl, C_GEN);
+      for (;;) { const t = Atomics.add(ctrl, C_NEXT, 1); if (t >= from + n) break; GOL.runTask(t); }   // the page works too
       const t0 = performance.now();
-      while (Atomics.load(ctrl, THINK.C_DONE) < workers.length) {
-        if (performance.now() - t0 > 400) { P.lastError = 'helper timed out'; P.fail(); break; }
+      while (Atomics.load(ctrl, C_DONE) < workers.length) {
+        if (performance.now() - t0 > 1000) { P.lastError = 'helper timed out'; P.fail(); break; }
       }
-      return true;   // any decision a helper didn't finish is redone by the master (see think())
+      P.stats.parallel++;
+      return true;
     },
     fail() {
       if (dead) return;
       dead = true;
-      if (ctrl) { Atomics.store(ctrl, THINK.C_STOP, 1); Atomics.add(ctrl, THINK.C_GEN, 1); Atomics.add(ctrl, C_WAKE, 1); Atomics.notify(ctrl, C_WAKE); }
+      Atomics.store(ctrl, C_STOP, 1); Atomics.add(ctrl, C_GEN, 1); Atomics.notify(ctrl, C_GEN);
       for (const wk of workers) wk.terminate();
       workers = [];
       console.warn('Multicore turned off:', P.lastError);
@@ -1520,7 +1544,31 @@ onmessage = e => {
   };
   return P;
 })();
-if (Pool.available) GOL.setThinker(Pool);
+if (Pool.available) { GOL.setAllocator(bytes => new SharedArrayBuffer(bytes)); GOL.setRunner(Pool); }
+
+// ---------------- animal references ----------------
+// The world keeps animals in shared typed arrays, by slot. A reference reads one animal live; it
+// stays valid while its slot still holds that animal (alive, or dead and not yet reused).
+let famNames = new Map(), famIds = new Map();   // family names (UI only) <-> numbers stored in the world
+function famIdOf(name) { if (!famIds.has(name)) { const id = famIds.size + 1; famIds.set(name, id); famNames.set(id, name); } return famIds.get(name); }
+class AnimalRef {
+  constructor(w, slot) { this.w = w; this.slot = slot; this.id = w.v.id[slot]; }
+  get valid() { return this.w === world && this.w.v.id[this.slot] === this.id; }
+  get alive() { return this.valid && !!this.w.v.alive[this.slot]; }
+  get sp() { return this.w.v.sp[this.slot]; } get male() { return !!this.w.v.male[this.slot]; }
+  get x() { return this.w.v.x[this.slot]; } get y() { return this.w.v.y[this.slot]; }
+  get age() { return this.w.v.age[this.slot]; } get energy() { return this.w.v.energy[this.slot]; }
+  get preg() { return this.w.v.preg[this.slot]; } get atk() { return this.w.v.atk[this.slot]; }
+  get life() { return this.w.v.life[this.slot]; } get gen() { return this.w.v.gen[this.slot]; }
+  get injected() { return !!this.w.v.injected[this.slot]; }
+  get mode() { return GOL.MODES[this.w.v.mode[this.slot]]; } get cause() { return GOL.CAUSES[this.w.v.cause[this.slot]]; }
+  get by() { return this.w.v.by[this.slot]; }
+  get fam() { const f = this.w.v.fam[this.slot]; return f ? famNames.get(f) || '' : ''; }
+  set fam(name) { this.w.v.fam[this.slot] = name ? famIdOf(name) : 0; }
+  get named() { return !!this.w.v.named[this.slot]; } set named(v) { this.w.v.named[this.slot] = v ? 1 : 0; }
+  is(o) { return !!o && o.slot === this.slot && o.id === this.id; }
+}
+const refOf = slot => new AnimalRef(world, slot);
 
 // ---------------- colour helpers ----------------
 const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -1836,16 +1884,16 @@ function render() {
   frameNo++;
   updateTerrain();
   beginView();
-  const A = world.animals, v = CAM.visibleTiles(cam);
-  const x0 = v.x0 - 1, y0 = v.y0 - 1, x1 = v.x1 + 1, y1 = v.y1 + 1;
-  for (let k = 0; k < A.length; k++) {
-    const a = A[k];
-    if (!a.alive || a.x < x0 || a.x > x1 || a.y < y0 || a.y > y1) continue;
-    const S = SPECIES[a.sp];
+  const vis = CAM.visibleTiles(cam), V = world.v, L = world.live;
+  const x0 = vis.x0 - 1, y0 = vis.y0 - 1, x1 = vis.x1 + 1, y1 = vis.y1 + 1;
+  for (let k = 0, n = world.liveN; k < n; k++) {
+    const s = L[k], ax = V.x[s], ay = V.y[s];
+    if (!V.alive[s] || ax < x0 || ax > x1 || ay < y0 || ay > y1) continue;
+    const sp = V.sp[s], S = SPECIES[sp];
     let v = 0;
     if (viewMode === 1) v = 1;
-    else if (viewMode === 2) v = 2 + Math.min(7, Math.max(0, (a.energy / S.maxE * 8) | 0));
-    drawSprite(sIdx(a.sp, a.male ? 1 : 0, a.face < 0 ? 1 : 0, a.age < S.mature ? 1 : 0, v), a.x, a.y, false);
+    else if (viewMode === 2) v = 2 + Math.min(7, Math.max(0, (V.energy[s] / S.maxE * 8) | 0));
+    drawSprite(sIdx(sp, V.male[s], V.face[s] < 0 ? 1 : 0, V.age[s] < S.mature ? 1 : 0, v), ax, ay, false);
   }
   // particles
   for (const p of particles) {
@@ -1888,20 +1936,21 @@ function render() {
 // Named founders get a name tag; their descendants get a small heart. Hidden at whole-world zoom.
 function drawNameLabels() {
   if (cam.zi === 0 || !world || !famCounts.size) return;
-  const v = CAM.visibleTiles(cam), A = world.animals, tile = CELL * CAM.zoom(cam);
+  const v = CAM.visibleTiles(cam), V = world.v, L = world.live, tile = CELL * CAM.zoom(cam);
   let tags = 0, hearts = 0;
   ctx.font = '8px "Press Start 2P", monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-  for (let k = 0; k < A.length; k++) {
-    const a = A[k];
-    if (!a.fam || !a.alive || a.x < v.x0 || a.x > v.x1 || a.y < v.y0 || a.y > v.y1) continue;
-    const p = CAM.tileToCanvas(cam, a.x, a.y), cx = Math.round(p.x + tile / 2);
-    if (a.named && tags < 40) {
+  for (let k = 0, n = world.liveN; k < n; k++) {
+    const s = L[k], ax = V.x[s], ay = V.y[s];
+    if (!V.fam[s] || !V.alive[s] || ax < v.x0 || ax > v.x1 || ay < v.y0 || ay > v.y1) continue;
+    const p = CAM.tileToCanvas(cam, ax, ay), cx = Math.round(p.x + tile / 2);
+    if (V.named[s] && tags < 40) {
       tags++;
-      const w = Math.ceil(ctx.measureText(a.fam).width) + 6, y = Math.round(p.y) - 2;
+      const name = famNames.get(V.fam[s]) || '';
+      const w = Math.ceil(ctx.measureText(name).width) + 6, y = Math.round(p.y) - 2;
       ctx.fillStyle = 'rgba(10,12,30,.85)'; ctx.fillRect(cx - (w >> 1), y - 11, w, 11);
       ctx.fillStyle = '#ff7ac8'; ctx.fillRect(cx - (w >> 1), y - 1, w, 1);
-      ctx.fillStyle = '#fff'; ctx.fillText(a.fam, cx, y - 1);
+      ctx.fillStyle = '#fff'; ctx.fillText(name, cx, y - 1);
     } else if (hearts++ < 150) {
       const s = Math.max(1, Math.round(tile / 6)), hx = cx - 2 * s, hy = Math.round(p.y) - 4 * s - 1;
       ctx.fillStyle = '#ff7ac8';
@@ -2044,6 +2093,7 @@ function processEvents() {
     switch (e.t) {
       case 'birth':
         if (!heavy || Math.random() < 0.3) spawn('birth', e.x, e.y);
+        if (e.fam) e.fam = famNames.get(e.fam) || '';
         if (e.fam) {
           const nb = (famBirths.get(e.fam) || 0) + e.n; famBirths.set(e.fam, nb);
           if (nb === e.n) { log(`♥ The <b style="color:var(--pink)">${e.fam}</b> family has ${e.n > 1 ? e.n + ' new babies' : 'a new baby'}!`, 'good'); toast(`♥ A BABY IN THE ${e.fam.toUpperCase()} FAMILY!`); spawn('heart', e.x, e.y); }
@@ -2221,6 +2271,7 @@ function animalHTML(a) {
   const S = SPECIES[a.sp];
   const sex = a.male ? '<span class="male">♂ male</span>' : '<span class="female">♀ female</span>';
   const head = `<div class="tt-head"><img src="${a.male ? ICONS[a.sp] : ICONS_F[a.sp]}" alt=""><b style="color:${S.color}">${S.name}</b> ${sex}</div>`;
+  if (!a.valid) return head + `<div class="tt-role">This animal is no longer on the savanna.</div>`;
   if (!a.alive) {
     const by = a.by >= 0 ? ' ' + SPECIES[a.by].name.toLowerCase() : '';
     return head + `<div class="tt-role">This ${S.name.toLowerCase()} ${CAUSE_TEXT[a.cause]}${by} at age ${fmtAge(a.age)}.</div>`;
@@ -2241,12 +2292,12 @@ function animalHTML(a) {
 const pickRadius = () => cam.zi === 0 ? 2 : 1;
 // The animal on tile (cx, cy), else the nearest one in rings 1..pickRadius() around it.
 function animalAt(cx, cy) {
-  const o = world.occ[cy * W + cx];
-  if (o) return o;
+  const occ = world.v.occ, o = occ[cy * W + cx];
+  if (o >= 0) return refOf(o);
   for (let r = 1, R = pickRadius(); r <= R; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
     const x = cx + dx, y = cy + dy;
-    if (x >= 0 && y >= 0 && x < W && y < H && world.occ[y * W + x]) return world.occ[y * W + x];
+    if (x >= 0 && y >= 0 && x < W && y < H && occ[y * W + x] >= 0) return refOf(occ[y * W + x]);
   }
   return null;
 }
@@ -2255,7 +2306,7 @@ function updateTooltip() {
   const tt = $('#tooltip');
   if (tool !== -1 || !hover || !lastMouse || (drag && drag.moved)) { tt.style.display = 'none'; return; }
   const a = animalAt(hover.x, hover.y);
-  if (!a || a === selected) { tt.style.display = 'none'; return; }
+  if (!a || a.is(selected)) { tt.style.display = 'none'; return; }
   tt.innerHTML = animalHTML(a);
   tt.style.display = 'block';
   const wrap = $('#wrap').getBoundingClientRect();
@@ -2466,7 +2517,7 @@ function actAt(c, shift) {
     const pairs = shift ? 3 : 1;
     let ok = 0, first = null;
     for (let k = 0; k < pairs; k++) {
-      const ox = k === 0 ? 0 : Math.round((world.rand() - 0.5) * 8), oy = k === 0 ? 0 : Math.round((world.rand() - 0.5) * 8);
+      const ox = k === 0 ? 0 : Math.round((GOL.rand(world) - 0.5) * 8), oy = k === 0 ? 0 : Math.round((GOL.rand(world) - 0.5) * 8);
       const pair = GOL.inject(world, tool, c.x + ox, c.y + oy);
       if (pair) { ok++; if (!first) first = pair; }
     }
@@ -2481,11 +2532,11 @@ function actAt(c, shift) {
       note('inject');
       processEvents();
       updateSidebar();
-      openNamePicker(first);
+      openNamePicker(first.map(refOf));
     } else { toast("NO ROOM HERE. TRY OPEN GRASSLAND"); Sfx.play('click'); }
   } else {
     const a = animalAt(c.x, c.y);
-    if ((a || null) !== selected) follow = false;
+    if (!(a && a.is(selected))) follow = false;
     selected = a || null;
     updateTracker(); updateTooltip();
   }
@@ -2608,6 +2659,7 @@ function newWorld(preset, isDemo) {
   particles = []; selected = null; follow = false; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
   resultsShown = false; goneShown = false; everHadAnimals = false; famMax = new Map(); famCounts = new Map(); famBirths = new Map();
+  famNames = new Map(); famIds = new Map();
   if (pred) endPredict(true); wantAutoPredict = false; predAutoAt = -1e9; closeCard('nameCard');
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
@@ -2649,7 +2701,7 @@ let nameTimer = 0;
 function openNamePicker(group) {
   closeCard('nameCard');
   if (!group || !group.length || demo) return;
-  const live = new Set(); for (const a of world.animals) if (a.fam) live.add(a.fam);
+  const live = new Set(), V = world.v; for (let k = 0; k < world.liveN; k++) { const f = V.fam[world.live[k]]; if (f) live.add(famNames.get(f)); }
   const pool = NAMES.filter(n => !live.has(n));
   const pick = [];
   while (pick.length < 6 && pool.length) pick.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
@@ -2682,7 +2734,8 @@ $('#btnName').addEventListener('click', () => { if (selected && selected.alive) 
 // Count living members of each named family; note new arrivals, milestones and family lines ending.
 function updateFamilies() {
   const now = new Map();
-  for (const a of world.animals) if (a.fam && a.alive) now.set(a.fam, (now.get(a.fam) || 0) + 1);
+  const V = world.v;
+  for (let k = 0; k < world.liveN; k++) { const s = world.live[k], f = V.fam[s]; if (f && V.alive[s]) { const nm = famNames.get(f); now.set(nm, (now.get(nm) || 0) + 1); } }
   for (const [f, n] of famCounts) if (n > 0 && !now.get(f))
     log(`The last of the <b style="color:var(--pink)">${f}</b> family has gone. Every family line ends one day, but the species carries on through others.`, '');
   for (const [f, n] of now) for (const m of [10, 25, 50, 100]) if (n >= m && (famMax.get(f) || 0) < m && famMax.set(f, m))
@@ -2894,10 +2947,10 @@ function refreshMinimapBase() {
     mmBase[o] = t === T_GRASS ? MM_GRASS[Math.max(0, Math.min(15, (gr[i] * 15 + 0.5) | 0))]
       : t === T_WATER ? MM_WATER : t === T_TREE ? MM_TREE : MM_ROCK;
   }
-  const A = world.animals;
-  for (let pass = 0; pass < 2; pass++) for (let k = 0; k < A.length; k++) {   // prey first, predators on top
-    const a = A[k];
-    if (a.alive && (a.sp >= 3) === (pass === 1)) mmBase[(a.y >> 1) * MM_W + (a.x >> 1)] = MM_SP[a.sp];
+  const V = world.v, L = world.live;
+  for (let pass = 0; pass < 2; pass++) for (let k = 0, n = world.liveN; k < n; k++) {   // prey first, predators on top
+    const s = L[k], sp = V.sp[s];
+    if (V.alive[s] && (sp >= 3) === (pass === 1)) mmBase[(V.y[s] >> 1) * MM_W + (V.x[s] >> 1)] = MM_SP[sp];
   }
 }
 function drawMinimap() {
@@ -3006,17 +3059,17 @@ if (DEBUG) window.golDebug = {
   get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
   setSelected(a) { selected = a; updateTracker(); }, setFollow, pickRadius,
   get pred() { return pred; }, parkRating, openPredict, openNamePicker, showResults, Pool,
+  ref: slot => refOf(slot),   // an AnimalRef for a slot of the current world
   // Sim speed: ms per simulated day on a copy-free run of the current world.
   bench(days, threads) { Pool.setThreads(threads); const t0 = performance.now(); for (let i = 0; i < days; i++) { GOL.step(world); world.events.length = 0; } const ms = (performance.now() - t0) / days; Pool.setThreads($('#multicore').checked ? 99 : 1); return ms; },
   // Same seed, same days, different thread counts must give identical worlds.
-  parity(seed, days, threads) {
+  async parity(seed, days, threads) {
     Pool.setThreads(threads);
     const w = GOL.createWorld(seed, 'balanced');
+    await Pool.whenReady(w);
     for (let i = 0; i < days; i++) { GOL.step(w); w.events.length = 0; }
-    let h = 0;
-    for (const a of w.animals) h = (Math.imul(h, 31) + a.id * 7 + a.x * 131 + a.y * 977 + Math.round(a.energy * 100)) | 0;
     Pool.setThreads($('#multicore').checked ? 99 : 1);
-    return { animals: w.animals.length, hash: h };
+    return { animals: w.liveN, hash: GOL.hash(w) };
   },
 };
 
