@@ -238,7 +238,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
   <main class="layout">
     <section class="panel stage">
       <div class="canvas-wrap" id="wrap">
-        <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals."></canvas>
+        <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals. Drag or use W A S D to move around; mouse wheel, Z or X to zoom."></canvas>
         <div id="zoomBar" role="group" aria-label="Zoom">
           <button class="btn" id="btnZoomOut" title="Zoom out (X or mouse wheel)" aria-label="Zoom out">−</button>
           <button class="btn" id="btnZoomIn" title="Zoom in (Z or mouse wheel)" aria-label="Zoom in">+</button>
@@ -262,7 +262,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <div class="panel">
         <h2>INJECT A COUPLE <span style="color:var(--muted);font-size:7px"><span class="sym male">♂</span> + <span class="sym female">♀</span></span></h2>
         <div class="sp-grid" id="spGrid"></div>
-        <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect.</p>
+        <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect. Drag the map to move around; mouse wheel or <kbd>Z</kbd>/<kbd>X</kbd> to zoom.</p>
       </div>
       <div class="panel">
         <h2>POPULATION <button class="btn" id="btnRange" style="font-size:7px;padding:5px 6px">2 YEARS</button></h2>
@@ -368,6 +368,10 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>1–5</kbd><span>Select an animal to inject (Buffalo, Gazelle, Hare, Lion, Cheetah)</span>
       <kbd>CLICK</kbd><span>Release a ♂+♀ couple (with Shift: 3 couples)</span>
       <kbd>ARROWS + ENTER</kbd><span>Keyboard play: Tab to the map, move the cursor with the arrows, press Enter to act</span>
+      <kbd>WHEEL / Z X</kbd><span>Zoom in / out (or the − + ALL buttons on the map)</span>
+      <kbd>DRAG / W A S D</kbd><span>Move around the map (Shift = faster)</span>
+      <kbd>F</kbd><span>Follow the animal you are tracking</span>
+      <kbd>MINIMAP</kbd><span>Click or drag the small map in the corner to jump there</span>
       <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
       <kbd>SPACE</kbd><span>Pause / resume</span>
       <kbd>.</kbd><span>Step one day while paused</span>

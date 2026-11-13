@@ -26,6 +26,8 @@ Every birth needs a male and a female of the same species. Young predators follo
 
 - **1–5**: pick an animal, then **click the map** to release a ♂+♀ couple (**Shift+click** releases 3 couples).
 - **0 / Esc**: inspect tool. Hover to see an animal's age, energy and current action; click to track it.
+- The savanna is 320 × 200 tiles, bigger than one screen. **Mouse wheel** or **Z / X** zoom (also the **− + ALL** buttons on the map; ALL shows the whole world). **Drag** the map or hold **W A S D** to move around (**Shift** = faster); on a phone, drag with one finger and pinch to zoom.
+- **F** (or the **FOLLOW** button on the tracking card) keeps the camera on the animal you are tracking. Click or drag the **minimap** in the corner to jump anywhere.
 - **Space** pause · **.** step one day · **+/−** speed (1×–16×) · **V** view mode (normal / sex / energy) · **N** new world · **M** sound · **H** help.
 - Rainfall slider and wet/dry seasons change how fast grass grows.
 - Complete the 8 objectives, read the field notes in the journal (they appear when something worth learning happens), and explore the **Ecology 101** tab.
@@ -41,6 +43,16 @@ The simulation core (`<script id="sim-core">`) has no DOM dependencies, so you c
 ```bash
 node tools/balance.js 15 5 balanced   # years, seeds, preset: population report per half-year
 node tools/sweep.js '[{}, {"lion":{"crowdMax":2}}]' 20 4   # score parameter overrides by coexistence
+node tools/test-world.js    # world size and starting herds
+node tools/test-camera.js   # camera maths (zoom, pan, screen <-> tile, minimap)
 ```
 
-In testing with the default parameters, the Balanced Savanna kept all five species alive for 10+ years in every seed, and for 20 years in 9 of 10 seeds. Extinctions can still happen, and that is part of the lesson: reintroduce the species with the inject tool.
+The camera maths lives in its own DOM-free `<script id="camera-core">`. In-browser checks for zoom, drag, keyboard, minimap and follow live in `tools/ui-check.js`: serve the folder (for example `python3 -m http.server`), open `index.html?debug`, and run this in the browser console:
+
+```js
+await fetch('tools/ui-check.js').then(r => r.text()).then(t => (0, eval)(t)); await uiCheck();
+```
+
+It returns `{ passed, failed, notes }`; `failed` should be empty. Keep the tab visible while it runs, because hidden tabs pause animation.
+
+In testing with the default parameters (`node tools/balance.js 20 10 balanced`), the Balanced Savanna kept all five species alive for 10 years in 10 of 10 seeds, and for 20 years in 10 of 10 seeds. Extinctions can still happen, and that is part of the lesson: reintroduce the species with the inject tool.
