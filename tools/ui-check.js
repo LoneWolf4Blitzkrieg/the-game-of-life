@@ -88,6 +88,7 @@
     for (const id of [1, 11, 12]) ptr('pointercancel', 0, 0, { id });
     if (document.querySelector('#helpScreen').classList.contains('show')) key('Escape');
     ptr('pointerleave', 0, 0, { buttons: 0 });
+    if (document.activeElement === cv) cv.blur();
     key('Escape');              // inspect tool, nothing tracked
     D.resetCamera();
     await frames(2);
@@ -237,6 +238,64 @@
     const zi = D.cam.zi;
     ptr('pointerup', 430 + scr(160), 300, o2); ptr('pointerup', 430, 300, o1);
     check(zi === 2, 'zi after pinch-out ' + zi);
+  });
+
+  // ---------- group: keyboard (Task 6) ----------
+  // Hold a key for n frames; returns how far the window moved in world px.
+  async function hold(k, n, o = {}) {
+    const x0 = CAM.srcRect(D.cam).x;
+    key(k, o); await frames(n); key(k, { up: true, shift: o.shift });
+    return CAM.srcRect(D.cam).x - x0;
+  }
+  // Focus the map with the keyboard cursor (no mouse), starting from the view-centre tile.
+  function keyboardCursor() { cv.focus(); ptr('pointerleave', 0, 0, { buttons: 0 }); }
+  add('keyboard', 'D pans right while held', async () => {
+    const moved = await hold('d', 10);
+    check(moved > 0, 'window moved ' + moved);
+  });
+  add('keyboard', 'Shift+D pans faster than D', async () => {
+    const t0 = performance.now(), slow = await hold('d', 10), t1 = performance.now();
+    D.resetCamera();
+    const fast = await hold('D', 10, { shift: true }), t2 = performance.now();
+    const ratio = (fast / (t2 - t1)) / (slow / (t1 - t0));
+    check(ratio > 1.8, `speed ratio ${ratio.toFixed(2)} (slow ${slow}, fast ${fast})`);
+    return `Shift+D / D pan speed ratio ${ratio.toFixed(2)}`;
+  });
+  add('keyboard', 'pan keys ignored while help is open', async () => {
+    key('h');
+    check(document.querySelector('#helpScreen').classList.contains('show'), 'help did not open');
+    const moved = await hold('d', 10);
+    key('Escape');
+    check(moved === 0, 'window moved under help ' + moved);
+  });
+  add('keyboard', 'arrow cursor scrolls the camera', async () => {
+    keyboardCursor();
+    for (let i = 0; i < 20; i++) key('ArrowRight', { shift: true, target: cv });
+    check(D.hover && D.hover.x === 260, 'hover ' + JSON.stringify(D.hover));
+    const v = CAM.visibleTiles(D.cam);
+    check(v.x1 >= 262, 'visible x1 ' + v.x1);
+  });
+  add('keyboard', 'panning pulls the cursor into view', async () => {
+    keyboardCursor();
+    key('ArrowRight', { target: cv });
+    check(D.hover, 'no keyboard cursor');
+    CAM.panBy(D.cam, -3000, 0);
+    await frames(2);
+    const h = D.hover, want = h && CAM.pullInside(D.cam, h.x, h.y);
+    check(h && same(h, want), `hover ${JSON.stringify(h)}, fully visible would be ${JSON.stringify(want)}`);
+  });
+  add('keyboard', 'Enter acts in view', async () => {
+    key('3');
+    const t = freeGrassTile();
+    CAM.centerOn(D.cam, t.x, t.y);
+    await frames(1);
+    keyboardCursor();
+    const before = injected(), had = ids();
+    key('Enter', { target: cv });
+    check(injected() === before + 1, `injected ${before} -> ${injected()} (cursor ${JSON.stringify(D.hover)}, target ${t.x},${t.y})`);
+    const v = CAM.visibleTiles(D.cam), fresh = newAnimals(had, 2);
+    check(fresh.length === 2 && fresh.every(a => a.x >= v.x0 && a.x <= v.x1 && a.y >= v.y0 && a.y <= v.y1),
+      'new pair ' + JSON.stringify(fresh.map(a => [a.x, a.y])) + ' view ' + JSON.stringify(v));
   });
 
   // ---------- runner ----------

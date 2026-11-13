@@ -2070,13 +2070,16 @@ canvas.addEventListener('keydown', e => {
   const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!d && e.key !== 'Enter') return;
   e.preventDefault(); e.stopPropagation();
-  if (!hover) hover = { x: W >> 1, y: H >> 1 };
+  lastMouse = null;   // the keyboard owns the cursor until the mouse moves again
+  if (!hover) hover = viewCentreTile();
   if (d) {
     const n = e.shiftKey ? 5 : 1;
     hover = { x: Math.max(0, Math.min(W - 1, hover.x + d[0] * n)), y: Math.max(0, Math.min(H - 1, hover.y + d[1] * n)) };
+    CAM.ensureVisible(cam, hover.x, hover.y, 2);   // the camera scrolls to keep the cursor in view
   } else actAt(hover, e.shiftKey);
 });
-canvas.addEventListener('focus', () => { if (!hover) hover = { x: W >> 1, y: H >> 1 }; });
+const viewCentreTile = () => CAM.canvasToTile(cam, VIEW_W / 2, VIEW_H / 2);
+canvas.addEventListener('focus', () => { if (!hover) hover = viewCentreTile(); });
 canvas.addEventListener('blur', () => { if (!lastMouse) hover = null; });
 
 document.addEventListener('keydown', e => {
@@ -2098,9 +2101,19 @@ document.addEventListener('keydown', e => {
   else if (k === 'n' || k === 'N') openTitle();
   else if (k === 'h' || k === 'H' || k === '?') openHelp();
   else if (k === '.') { setRunning(false); GOL.step(world); }
+  else if (k.length === 1 && 'wasdWASD'.includes(k)) { heldPan.add(k.toLowerCase()); panFast = e.shiftKey; }
   else if (k === 'z' || k === 'Z') zoomTo(cam.zi + 1);
   else if (k === 'x' || k === 'X') zoomTo(cam.zi - 1);
 });
+
+// W A S D pan the map while held (Shift = faster); see frame().
+const heldPan = new Set(), PAN_SPEED = 600;   // canvas px per second
+let panFast = false;
+document.addEventListener('keyup', e => {
+  if (e.key.length === 1) heldPan.delete(e.key.toLowerCase());
+  panFast = e.shiftKey;
+});
+window.addEventListener('blur', () => heldPan.clear());
 
 // ---------------- title screen ----------------
 let titleCanClose = false, demo = true;
@@ -2175,6 +2188,22 @@ function newWorld(preset, isDemo) {
   updateSidebar(); updateObjectives(); drawCharts();
 }
 
+// ---------------- camera per frame ----------------
+let lastCamKey = '';
+function updateCamera(dt, overlay) {
+  if (heldPan.size && !overlay) {
+    const v = PAN_SPEED * (panFast ? 2.5 : 1) * dt;
+    const dx = (heldPan.has('d') ? 1 : 0) - (heldPan.has('a') ? 1 : 0), dy = (heldPan.has('s') ? 1 : 0) - (heldPan.has('w') ? 1 : 0);
+    if (dx || dy) { CAM.panBy(cam, dx * v, dy * v); follow = false; }
+  }
+  // When the view moved, keep the cursor honest: under the mouse, or (keyboard) pulled into view.
+  const r = CAM.srcRect(cam), key = r.x + ',' + r.y + ',' + cam.zi;
+  if (key === lastCamKey) return;
+  lastCamKey = key;
+  if (lastMouse && !(drag && drag.moved)) hover = cellFromClient(lastMouse.x, lastMouse.y);
+  else if (hover && document.activeElement === canvas) hover = CAM.pullInside(cam, hover.x, hover.y);
+}
+
 // ---------------- main loop ----------------
 let last = performance.now(), tickAcc = 0, lastUi = 0;
 function loop(now) {
@@ -2197,6 +2226,7 @@ function frame(now) {
   if (world) {
     if (!demo) processEvents(); else world.events.length = 0;
     updateParticles(dt);
+    updateCamera(dt, titleOpen || helpOpen);
     if (DEBUG) {
       const t0 = performance.now();
       render();
