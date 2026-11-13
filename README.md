@@ -8,7 +8,21 @@ Population booms, crashes and predator–prey cycles emerge from those individua
 
 **▶ Play online:** https://lonewolf4blitzkrieg.github.io/the-game-of-life/
 
-Or open `index.html` in any modern browser. No build step and no install. It works offline too (fonts fall back to monospace).
+Or open `index.html` in any modern browser. No build step and no install. See [Play offline](#play-offline) to keep multicore without internet.
+
+## Play offline
+
+All three ways give the same game; the first two keep **multicore**:
+
+1. **Install it from the website (easiest).** Visit the game online once. It then keeps a copy on the device and opens without internet, multicore included. In Chrome or Edge you can also choose **Install app** (in the address bar or menu) to get a desktop icon.
+2. **Downloaded copy with a launcher (USB stick, ZIP, school network share).** Download the repository as a ZIP, unzip it, then double-click:
+   - **Windows:** `Play Offline (Windows).bat` (uses built-in PowerShell, nothing to install).
+   - **macOS:** `Play Offline (Mac).command` (needs Python 3; the first time, right-click → Open).
+   - **Linux:** `./play-offline.sh` (needs Python 3).
+
+   It serves the game folder on that computer only (`http://localhost:8123`) and opens your browser. Keep its window open while you play.
+3. **Just open `index.html`.** Works anywhere, but browsers never allow multicore for files opened straight from disk, so it runs on one thread (with exactly the same results). Without internet the pixel fonts fall back to a plain font.
+
 
 ## The species
 
@@ -53,7 +67,7 @@ The whole world lives in shared memory and every simulated day runs in parallel 
 - **Same results on any CPU:** each strip has its own random numbers, newborn slots and event list, merged in a fixed order, so a world plays out identically on 1, 2, 4 or 16 threads and Daily Savanna stays fair.
 - **Speed:** on a mature world the simulation runs about **+10% faster on 2 threads and about +50% on 4–16 threads** than the old single-threaded game (average +40% across 2–16 threads). See [docs/multicore-benchmark.md](docs/multicore-benchmark.md) for how this was measured and how it compares with the alternative "master + helper threads" design.
 - **Turned on automatically**, using one helper per extra CPU thread; switch it off under **Environment → Multicore**.
-- **Needs the online version:** shared memory requires "cross-origin isolation". GitHub Pages can't send the required headers, so the small service worker `coi-sw.js` adds them, which costs one automatic reload on the first visit. Opened straight from a file, the game runs on one thread with exactly the same results.
+- **Online or offline:** shared memory requires "cross-origin isolation". On the website, the small service worker `coi-sw.js` adds the required headers (one automatic reload on the first visit) and also keeps the game for offline use; offline launchers send the headers themselves. Opened straight from a file, the game runs on one thread with exactly the same results. See [Play offline](#play-offline).
 - **Safety net:** if a helper ever stops responding, the game finishes on the page and stays single-threaded for the rest of the session.
 
 ## Developer tools
