@@ -70,11 +70,18 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
 .stage{padding:8px}
 .canvas-wrap{position:relative;margin:0 auto;max-width:calc((100vh - 150px) * 1.6);background:#000;border:2px solid var(--edge)}
-#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:manipulation}
+#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:none}
+#world.dragging{cursor:grabbing}
 .statusbar{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:18px}
 .statusbar b{color:var(--text);font-weight:normal}
 .legend-energy{display:inline-flex;align-items:center;gap:6px}
 .legend-energy i{display:inline-block;width:70px;height:10px;background:linear-gradient(90deg,#ff3b3b,#ffd23f,#4dff6a);border:1px solid #000}
+#zoomBar{position:absolute;top:8px;right:8px;z-index:4;display:flex;gap:4px}
+#zoomBar .btn{padding:6px 8px;min-width:30px}
+#zoomBar .btn:disabled{opacity:.4;cursor:default}
+#minimap{position:absolute;right:8px;bottom:8px;width:160px;height:100px;border:2px solid var(--edge);
+  box-shadow:0 0 0 1px var(--gold);image-rendering:pixelated;touch-action:none;z-index:4;display:none;cursor:pointer;background:#000}
+#minimap.show{display:block}
 #pausedTag{position:absolute;top:8px;left:8px;font-family:var(--px);font-size:9px;background:rgba(5,6,15,.8);
   padding:6px 8px;border:2px solid var(--gold);color:var(--gold);display:none;pointer-events:none}
 #pausedTag.show{display:block;animation:blink 1s steps(2) infinite}
@@ -82,6 +89,8 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 #tooltip,#tracker{position:absolute;pointer-events:none;background:rgba(10,12,30,.94);border:2px solid var(--edge);
   box-shadow: inset 1px 1px 0 var(--hi), 0 3px 0 #000;padding:6px 8px;font-size:18px;min-width:170px;display:none;z-index:5}
 #tracker{left:8px;bottom:8px;pointer-events:auto;border-color:var(--gold)}
+#btnFollow{margin-top:6px;padding:5px 8px;font-size:8px}
+#btnFollow.on{background:var(--gold);color:#1a1300;box-shadow:inset 2px 2px 0 #fff3b0,inset -2px -2px 0 #a07d00}
 #tracker .x{position:absolute;right:4px;top:2px;cursor:pointer;color:var(--muted);background:none;border:0;font-size:18px}
 .tt-head{display:flex;align-items:center;gap:6px;margin-bottom:3px}
 .tt-head img{width:24px;height:24px;image-rendering:pixelated}
@@ -229,14 +238,21 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
   <main class="layout">
     <section class="panel stage">
       <div class="canvas-wrap" id="wrap">
-        <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals."></canvas>
+        <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals. Drag or use W A S D to move around; mouse wheel, Z or X to zoom."></canvas>
+        <div id="zoomBar" role="group" aria-label="Zoom">
+          <button class="btn" id="btnZoomOut" title="Zoom out (X or mouse wheel)" aria-label="Zoom out">−</button>
+          <button class="btn" id="btnZoomIn" title="Zoom in (Z or mouse wheel)" aria-label="Zoom in">+</button>
+          <button class="btn" id="btnZoomAll" title="Whole world (press again to go back)">ALL</button>
+        </div>
+        <canvas id="minimap" width="160" height="100" aria-label="Minimap: click or drag to move the view"></canvas>
         <div id="pausedTag">PAUSED</div>
         <div id="tooltip"></div>
-        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div></div>
+        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div><button class="btn" id="btnFollow" title="Keep the camera on this animal (F)" aria-pressed="false">FOLLOW</button></div>
         <div id="toast" role="status"></div>
       </div>
       <div class="statusbar">
         <span id="toolText">Tool: <b>Inspect</b></span>
+        <span id="zoomText">Zoom <b>1×</b></span>
         <span id="viewLegend"></span>
         <span>Seed <b id="seedText">—</b></span>
       </div>
@@ -246,7 +262,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <div class="panel">
         <h2>INJECT A COUPLE <span style="color:var(--muted);font-size:7px"><span class="sym male">♂</span> + <span class="sym female">♀</span></span></h2>
         <div class="sp-grid" id="spGrid"></div>
-        <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect.</p>
+        <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect. Drag the map to move around; mouse wheel or <kbd>Z</kbd>/<kbd>X</kbd> to zoom.</p>
       </div>
       <div class="panel">
         <h2>POPULATION <button class="btn" id="btnRange" style="font-size:7px;padding:5px 6px">2 YEARS</button></h2>
@@ -352,6 +368,10 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>1–5</kbd><span>Select an animal to inject (Buffalo, Gazelle, Hare, Lion, Cheetah)</span>
       <kbd>CLICK</kbd><span>Release a ♂+♀ couple (with Shift: 3 couples)</span>
       <kbd>ARROWS + ENTER</kbd><span>Keyboard play: Tab to the map, move the cursor with the arrows, press Enter to act</span>
+      <kbd>WHEEL / Z X</kbd><span>Zoom in / out (or the − + ALL buttons on the map)</span>
+      <kbd>DRAG / W A S D</kbd><span>Move around the map (Shift = faster)</span>
+      <kbd>F</kbd><span>Follow the animal you are tracking</span>
+      <kbd>MINIMAP</kbd><span>Click or drag the small map in the corner to jump there</span>
       <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
       <kbd>SPACE</kbd><span>Pause / resume</span>
       <kbd>.</kbd><span>Step one day while paused</span>
@@ -369,12 +389,12 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
 <script id="sim-core">
 const GOL = (() => {
   'use strict';
-  const W = 160, H = 100, N = W * H, YEAR = 360;
+  const W = 320, H = 200, N = W * H, YEAR = 360;
   const CH = 10, CW = W / CH, CHH = H / CH, CN = CW * CHH;
   const T_GRASS = 0, T_WATER = 1, T_TREE = 2, T_ROCK = 3;
   const PREY_MASK = 0b00111, PRED_MASK = 0b11000;
   const D8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-  const HIST_CAP = 2400, SAMPLE_EVERY = 4, MAX_ANIMALS = 6000;
+  const HIST_CAP = 2400, SAMPLE_EVERY = 4, MAX_ANIMALS = 24000;
   const CAUSES = ['eaten', 'starve', 'age', 'fight'];
 
   // Index 0..2 = Prey A/B/C, 3..4 = Predator A/B
@@ -550,7 +570,7 @@ const GOL = (() => {
   }
 
   function populate(w) {
-    const plan = [[0, 36, 4], [1, 80, 6], [2, 200, 10], [3, 12, 3], [4, 12, 3]];
+    const plan = [[0, 144, 16], [1, 320, 24], [2, 800, 40], [3, 48, 12], [4, 48, 12]];
     const r = w.rand;
     for (const [sp, n, groups] of plan) {
       const S = SPECIES[sp], per = Math.ceil(n / groups);
@@ -1041,10 +1061,111 @@ const GOL = (() => {
     return h;
   }
 
-  return { W, H, N, YEAR, SPECIES, CAUSES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY,
+  return { W, H, N, YEAR, SPECIES, CAUSES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY, MAX_ANIMALS,
     createWorld, step, inject, seasonInfo, shannon, catchProb };
 })();
 if (typeof module !== 'undefined') module.exports = GOL;
+</script>
+
+<!-- ===================== CAMERA CORE (no DOM) ===================== -->
+<script id="camera-core">
+// Which part of the world the map canvas shows, and how canvas points map to tiles.
+// Pure maths with no DOM, so tools/test-camera.js can run it in Node.
+// Units: tiles (the world grid), world px (tile * cell), canvas px (the 960 x 600 map canvas).
+// cam.x / cam.y = top-left of the visible window in world px. They stay fractional so slow
+// drags at high zoom still add up; srcRect() rounds them for drawing.
+const CAM = (() => {
+  'use strict';
+  const ZOOMS = Object.freeze([0.5, 1, 2, 3]);   // canvas px per world px: tiles are 3, 6, 12, 18 px
+  const DEFAULT_ZI = 1, DRAG_PX = 6;            // DRAG_PX: screen px a press may move and still be a click
+
+  const zoom = c => ZOOMS[c.zi];
+  const winW = c => c.viewW / zoom(c), winH = c => c.viewH / zoom(c);
+
+  // Keep the window inside the world, so the map never shows empty space past the edge.
+  function clamp(c) {
+    c.x = Math.max(0, Math.min(c.worldW * c.cell - winW(c), c.x));
+    c.y = Math.max(0, Math.min(c.worldH * c.cell - winH(c), c.y));
+    return c;
+  }
+  function create({ worldW, worldH, cell, viewW, viewH }) {
+    const c = { worldW, worldH, cell, viewW, viewH, zi: DEFAULT_ZI, x: 0, y: 0 };
+    c.x = (worldW * cell - winW(c)) / 2;
+    c.y = (worldH * cell - winH(c)) / 2;
+    return clamp(c);
+  }
+  function srcRect(c) { return { x: Math.round(c.x), y: Math.round(c.y), w: winW(c), h: winH(c) }; }
+  function centerOn(c, tx, ty) {
+    c.x = (tx + 0.5) * c.cell - winW(c) / 2;
+    c.y = (ty + 0.5) * c.cell - winH(c) / 2;
+    return clamp(c);
+  }
+  // dx, dy in canvas px; positive dx shows more of the east.
+  function panBy(c, dx, dy) {
+    c.x += dx / zoom(c);
+    c.y += dy / zoom(c);
+    return clamp(c);
+  }
+  // Change zoom level, keeping the world point under canvas point (ax, ay) where it is.
+  function setZoom(c, zi, ax = c.viewW / 2, ay = c.viewH / 2) {
+    const r = srcRect(c), wx = r.x + ax / zoom(c), wy = r.y + ay / zoom(c);
+    c.zi = Math.max(0, Math.min(ZOOMS.length - 1, zi | 0));
+    c.x = wx - ax / zoom(c);
+    c.y = wy - ay / zoom(c);
+    return clamp(c);
+  }
+  function canvasToTile(c, cx, cy) {
+    if (!(cx >= 0 && cy >= 0 && cx < c.viewW && cy < c.viewH)) return null;
+    const r = srcRect(c), z = zoom(c);
+    const x = Math.floor((r.x + cx / z) / c.cell), y = Math.floor((r.y + cy / z) / c.cell);
+    return x >= 0 && y >= 0 && x < c.worldW && y < c.worldH ? { x, y } : null;
+  }
+  // Canvas px of a tile's top-left corner (may be off the canvas).
+  function tileToCanvas(c, tx, ty) {
+    const r = srcRect(c), z = zoom(c);
+    return { x: (tx * c.cell - r.x) * z, y: (ty * c.cell - r.y) * z };
+  }
+  // Tiles at least partly visible (inclusive).
+  function visibleTiles(c) {
+    const r = srcRect(c);
+    return { x0: Math.floor(r.x / c.cell), y0: Math.floor(r.y / c.cell),
+      x1: Math.floor((r.x + r.w - 1) / c.cell), y1: Math.floor((r.y + r.h - 1) / c.cell) };
+  }
+  // Tiles completely visible (inclusive).
+  function fullTiles(c) {
+    const r = srcRect(c);
+    return { x0: Math.ceil(r.x / c.cell), y0: Math.ceil(r.y / c.cell),
+      x1: Math.floor((r.x + r.w) / c.cell) - 1, y1: Math.floor((r.y + r.h) / c.cell) - 1 };
+  }
+  function pullInside(c, tx, ty) {
+    const f = fullTiles(c);
+    return { x: Math.max(f.x0, Math.min(f.x1, tx)), y: Math.max(f.y0, Math.min(f.y1, ty)) };
+  }
+  // Pan as little as possible so tiles tx±margin, ty±margin are completely visible.
+  function ensureVisible(c, tx, ty, margin = 0) {
+    const r = srcRect(c);
+    const mx = Math.max(0, Math.min(margin, Math.floor((r.w / c.cell - 1) / 2)));
+    const my = Math.max(0, Math.min(margin, Math.floor((r.h / c.cell - 1) / 2)));
+    const left = (tx - mx) * c.cell, right = (tx + mx + 1) * c.cell;
+    const top = (ty - my) * c.cell, bottom = (ty + my + 1) * c.cell;
+    if (left < r.x) c.x = left; else if (right > r.x + r.w) c.x = right - r.w;
+    if (top < r.y) c.y = top; else if (bottom > r.y + r.h) c.y = bottom - r.h;
+    return clamp(c);
+  }
+  // Minimap of mmW x mmH px showing the whole world.
+  function minimapToTile(c, mx, my, mmW, mmH) {
+    return { x: Math.max(0, Math.min(c.worldW - 1, Math.floor(mx * c.worldW / mmW))),
+      y: Math.max(0, Math.min(c.worldH - 1, Math.floor(my * c.worldH / mmH))) };
+  }
+  function minimapViewRect(c, mmW, mmH) {
+    const r = srcRect(c), ww = c.worldW * c.cell, wh = c.worldH * c.cell;
+    return { x: r.x * mmW / ww, y: r.y * mmH / wh, w: r.w * mmW / ww, h: r.h * mmH / wh };
+  }
+
+  return { ZOOMS, DEFAULT_ZI, DRAG_PX, create, zoom, srcRect, centerOn, panBy, setZoom,
+    canvasToTile, tileToCanvas, visibleTiles, pullInside, ensureVisible, minimapToTile, minimapViewRect };
+})();
+if (typeof module !== 'undefined') module.exports = CAM;
 </script>
 
 <!-- ===================== RENDERING + UI ===================== -->
@@ -1052,7 +1173,9 @@ if (typeof module !== 'undefined') module.exports = GOL;
 (() => {
 'use strict';
 const { W, H, SPECIES, YEAR, T_GRASS, T_WATER, T_TREE, T_ROCK } = GOL;
-const CELL = 6, PW = W * CELL, PH = H * CELL;
+const CELL = 6, PW = W * CELL, PH = H * CELL;   // PW x PH: the whole world in world px
+const VIEW_W = 960, VIEW_H = 600;                 // the map canvas, in canvas px
+const DEBUG = /[?&]debug\b/.test(location.search);
 const $ = s => document.querySelector(s);
 const storage = {
   get(k, d) { try { const v = localStorage.getItem('gol.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -1242,9 +1365,19 @@ let journalUnread = 0, notesShown = new Set(), objDone = {}, goalTrack = {};
 let lastYearSnap = null, milestones = {}, everHadPred = false, prevSeasonLogged = '';
 
 const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
-const img = ctx.createImageData(PW, PH);
-const frameBuf = new Uint32Array(img.data.buffer);
+// The camera picks the window of the world the map shows (see camera-core).
+const startCam = () => CAM.create({ worldW: W, worldH: H, cell: CELL, viewW: VIEW_W, viewH: VIEW_H });
+const cam = startCam();
+let follow = false;   // camera follows the tracked animal
+let wheelAcc = 0, wheelAt = 0, zoomBeforeAll = 1;   // zoom input state (see zoomTo)
+function resetCamera() { Object.assign(cam, startCam()); wheelAcc = 0; zoomBeforeAll = 1; updateZoomUI(); }   // 1x, centred on the middle of the world
+// terrainBuf holds the whole world's terrain (world px). Each frame, beginView() copies the camera's
+// window into frameBuf (VW x VH world px, top-left at VX, VY); sprites and particles are drawn on top,
+// and the window is scaled onto the map canvas with nearest-neighbour scaling.
 const terrainBuf = new Uint32Array(PW * PH);
+const viewCanvas = document.createElement('canvas'), vctx = viewCanvas.getContext('2d', { alpha: false });
+let viewImg = null, frameBuf = null, VX = 0, VY = 0, VW = 0, VH = 0;
+let PXB = 1;   // setPx block size: 2 at whole-world zoom, so 1-px lines survive the 2:1 downscale
 const lastKey = new Int32Array(W * H);
 let cellVar = new Uint8Array(W * H), waterDeep = new Uint8Array(W * H);
 
@@ -1300,11 +1433,26 @@ function blend(d, s, red) {
   if (red) { r = 255; g = 60; b = 60; }
   return ((255 << 24) | ((((d >>> 16) & 255) + b) >> 1 << 16) | ((((d >>> 8) & 255) + g) >> 1 << 8) | (((d & 255) + r) >> 1)) >>> 0;
 }
+// Start a frame: copy the camera's window of the terrain into frameBuf.
+function beginView() {
+  const r = CAM.srcRect(cam);
+  if (r.w !== VW || r.h !== VH) {
+    viewCanvas.width = r.w; viewCanvas.height = r.h;
+    viewImg = vctx.createImageData(r.w, r.h);
+    frameBuf = new Uint32Array(viewImg.data.buffer);
+  }
+  VX = r.x; VY = r.y; VW = r.w; VH = r.h;
+  PXB = CAM.zoom(cam) < 1 ? 2 : 1;
+  if (VW === PW) frameBuf.set(terrainBuf.subarray(VY * PW, (VY + VH) * PW));
+  else for (let y = 0, s = VY * PW + VX; y < VH; y++, s += PW) frameBuf.set(terrainBuf.subarray(s, s + VW), y * VW);
+}
+// Draw a 6x6 sprite on tile (cx, cy), clipped to the view window.
 function drawSprite(off, cx, cy, ghost, red) {
-  const base = cy * CELL * PW + cx * CELL;
-  for (let py = 0; py < 6; py++) {
-    const row = base + py * PW, so = off + py * 6;
-    for (let px = 0; px < 6; px++) {
+  const x0 = cx * CELL - VX, y0 = cy * CELL - VY;
+  const pxA = Math.max(0, -x0), pxB = Math.min(6, VW - x0), pyA = Math.max(0, -y0), pyB = Math.min(6, VH - y0);
+  for (let py = pyA; py < pyB; py++) {
+    const row = (y0 + py) * VW + x0, so = off + py * 6;
+    for (let px = pxA; px < pxB; px++) {
       const c = sprites[so + px];
       if (!c) continue;
       const idx = row + px;
@@ -1313,10 +1461,19 @@ function drawSprite(off, cx, cy, ghost, red) {
     }
   }
 }
+// Set one world px. At whole-world zoom (PXB 2) fill its even-aligned 2x2 block instead,
+// so outlines and particles still show after the 2:1 downscale.
 function setPx(x, y, c) {
-  x |= 0; y |= 0;
-  if (x < 0 || y < 0 || x >= PW || y >= PH) return;
-  frameBuf[y * PW + x] = c;
+  x = (x | 0) - VX; y = (y | 0) - VY;
+  if (PXB === 1) {
+    if (x < 0 || y < 0 || x >= VW || y >= VH) return;
+    frameBuf[y * VW + x] = c;
+  } else {
+    x &= ~1; y &= ~1;
+    if (x < 0 || y < 0 || x + 1 >= VW || y + 1 >= VH) return;
+    const i = y * VW + x;
+    frameBuf[i] = frameBuf[i + 1] = frameBuf[i + VW] = frameBuf[i + VW + 1] = c;
+  }
 }
 function rectOutline(x0, y0, w, h, c, gapCorners) {
   for (let x = x0; x < x0 + w; x++) {
@@ -1335,11 +1492,12 @@ const HEART = ['.x.x.', 'xxxxx', '.xxx.', '..x..'];
 function render() {
   frameNo++;
   updateTerrain();
-  frameBuf.set(terrainBuf);
-  const A = world.animals;
+  beginView();
+  const A = world.animals, v = CAM.visibleTiles(cam);
+  const x0 = v.x0 - 1, y0 = v.y0 - 1, x1 = v.x1 + 1, y1 = v.y1 + 1;
   for (let k = 0; k < A.length; k++) {
     const a = A[k];
-    if (!a.alive) continue;
+    if (!a.alive || a.x < x0 || a.x > x1 || a.y < y0 || a.y > y1) continue;
     const S = SPECIES[a.sp];
     let v = 0;
     if (viewMode === 1) v = 1;
@@ -1369,7 +1527,7 @@ function render() {
     const c = (frameNo >> 3) & 1 ? GOLD : WHITE;
     rectOutline(selected.x * CELL - 2, selected.y * CELL - 2, CELL + 4, CELL + 4, c, true);
   }
-  if (hover) {
+  if (hover && !(drag && drag.moved)) {   // no hover preview while dragging the map
     if (tool >= 0) {
       const ok = world.terrain[hover.y * W + hover.x] === T_GRASS;
       drawSprite(sIdx(tool, 1, 0, 0, 0), hover.x, hover.y, true, !ok);
@@ -1379,7 +1537,9 @@ function render() {
       rectOutline(hover.x * CELL - 1, hover.y * CELL - 1, CELL + 2, CELL + 2, pack([255, 255, 255]), true);
     }
   }
-  ctx.putImageData(img, 0, 0);
+  vctx.putImageData(viewImg, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(viewCanvas, 0, 0, VW, VH, 0, 0, VIEW_W, VIEW_H);
 }
 
 // ---------------- particles ----------------
@@ -1462,8 +1622,8 @@ function note(id) {
 // ---------------- objectives ----------------
 const OBJECTIVES = [
   { id: 'couple', t: 'Matchmaker', d: 'Release your first ♂+♀ couple.', p: () => sumArr(world.injected) >= 1, prog: () => `${Math.min(1, sumArr(world.injected))}/1` },
-  { id: 'boom', t: 'Baby Boom', d: 'Witness 3,000 births.', p: () => sumArr(world.births) >= 3000, prog: () => `${Math.min(3000, sumArr(world.births))}/3000` },
-  { id: 'chain', t: 'Circle of Life', d: 'Predators make 1,000 successful hunts.', p: () => sumArr(world.kills) >= 1000, prog: () => `${Math.min(1000, sumArr(world.kills))}/1000` },
+  { id: 'boom', t: 'Baby Boom', d: 'Witness 12,000 births.', p: () => sumArr(world.births) >= 12000, prog: () => `${Math.min(12000, sumArr(world.births))}/12000` },
+  { id: 'chain', t: 'Circle of Life', d: 'Predators make 4,000 successful hunts.', p: () => sumArr(world.kills) >= 4000, prog: () => `${Math.min(4000, sumArr(world.kills))}/4000` },
   { id: 'rival', t: 'Rivalry', d: 'Witness 10 fights between lions and cheetahs.', p: () => world.fights >= 10, prog: () => `${Math.min(10, world.fights)}/10` },
   { id: 'coexist', t: 'Coexistence', d: 'Keep all 5 species alive for 3 years in a row.', p: () => coexistDays() >= YEAR * 3, prog: () => `${(coexistDays() / YEAR).toFixed(1)}/3 yrs` },
   { id: 'diverse', t: 'Thriving Ecosystem', d: 'Reach a biodiversity index (Shannon H) of 1.30.', p: () => GOL.shannon(world.counts) >= 1.3, prog: () => `${GOL.shannon(world.counts).toFixed(2)}/1.30` },
@@ -1701,10 +1861,15 @@ function animalHTML(a) {
     ${a.preg > 0 ? `<div>Pregnant: ${a.preg} days to go</div>` : ''}
     ${!S.isPrey && a.atk > 0 ? '<div style="color:var(--muted)">Recovering…</div>' : ''}`;
 }
+// How far (in tiles) a click may miss an animal and still pick it: wider at whole-world zoom,
+// where tiles are only 3 px.
+const pickRadius = () => cam.zi === 0 ? 2 : 1;
+// The animal on tile (cx, cy), else the nearest one in rings 1..pickRadius() around it.
 function animalAt(cx, cy) {
   const o = world.occ[cy * W + cx];
   if (o) return o;
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+  for (let r = 1, R = pickRadius(); r <= R; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
     const x = cx + dx, y = cy + dy;
     if (x >= 0 && y >= 0 && x < W && y < H && world.occ[y * W + x]) return world.occ[y * W + x];
   }
@@ -1713,7 +1878,7 @@ function animalAt(cx, cy) {
 let lastMouse = null;
 function updateTooltip() {
   const tt = $('#tooltip');
-  if (tool !== -1 || !hover || !lastMouse) { tt.style.display = 'none'; return; }
+  if (tool !== -1 || !hover || !lastMouse || (drag && drag.moved)) { tt.style.display = 'none'; return; }
   const a = animalAt(hover.x, hover.y);
   if (!a || a === selected) { tt.style.display = 'none'; return; }
   tt.innerHTML = animalHTML(a);
@@ -1729,9 +1894,25 @@ function updateTracker() {
   if (!selected) { el.style.display = 'none'; return; }
   $('#trackerBody').innerHTML = `<div style="font-family:var(--px);font-size:7px;color:var(--gold);margin-bottom:4px">TRACKING</div>` + animalHTML(selected);
   el.style.display = 'block';
+  const b = $('#btnFollow');
+  b.textContent = follow ? 'FOLLOWING' : 'FOLLOW';
+  b.classList.toggle('on', follow);
+  b.setAttribute('aria-pressed', follow ? 'true' : 'false');
 }
-$('#tracker .x').addEventListener('pointerdown', e => { e.preventDefault(); selected = null; updateTracker(); });
-$('#tracker .x').addEventListener('click', () => { selected = null; updateTracker(); canvas.focus(); });
+// Follow the tracked animal with the camera (only while it is alive). Turning it on centres at once.
+function setFollow(on) {
+  follow = !!(on && selected && selected.alive);
+  if (follow) CAM.centerOn(cam, selected.x, selected.y);
+  updateTracker();
+}
+function toggleFollow() {
+  if (!follow && !(selected && selected.alive)) { toast('CLICK AN ANIMAL FIRST TO TRACK IT'); return; }
+  setFollow(!follow);
+}
+$('#tracker .x').addEventListener('pointerdown', e => { e.preventDefault(); selected = null; follow = false; updateTracker(); });
+$('#tracker .x').addEventListener('click', () => { selected = null; follow = false; updateTracker(); canvas.focus(); });
+$('#btnFollow').addEventListener('pointerdown', e => e.preventDefault());   // keep the map's keyboard focus
+$('#btnFollow').addEventListener('click', toggleFollow);
 
 // ---------------- controls ----------------
 function setTool(t) {
@@ -1775,20 +1956,133 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   if (t.dataset.tab === 'journal') { journalUnread = 0; $('#jBadge').style.display = 'none'; }
 });
 
-function cellFrom(e) {
+// Client (screen) px -> canvas px of the 960 x 600 map (the canvas is CSS-scaled).
+function canvasPoint(clientX, clientY) {
   const r = canvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX - r.left) / r.width * W), y = Math.floor((e.clientY - r.top) / r.height * H);
-  if (x < 0 || y < 0 || x >= W || y >= H) return null;
-  return { x, y };
+  return { x: (clientX - r.left) / r.width * VIEW_W, y: (clientY - r.top) / r.height * VIEW_H };
 }
-canvas.addEventListener('pointermove', e => { hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY }; updateTooltip(); });
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
+// The tile under a client point, or null off the map.
+function cellFromClient(clientX, clientY) {
+  const p = canvasPoint(clientX, clientY);
+  return CAM.canvasToTile(cam, p.x, p.y);
+}
+const cellFrom = e => cellFromClient(e.clientX, e.clientY);
+
+// ---------------- zoom ----------------
+const ZOOM_LABELS = ['WHOLE WORLD', '1×', '2×', '3×'];
+// Zoom to level zi (clamped), keeping the world point under canvas point (ax, ay) in place.
+function zoomTo(zi, ax, ay) {
+  CAM.setZoom(cam, zi, ax, ay);
+  updateZoomUI();
+}
+function updateZoomUI() {
+  const zt = $('#zoomText');
+  if (!zt) return;
+  zt.innerHTML = `Zoom <b>${ZOOM_LABELS[cam.zi]}</b>`;
+  $('#btnZoomIn').disabled = cam.zi >= CAM.ZOOMS.length - 1;
+  $('#btnZoomOut').disabled = cam.zi <= 0;
+  updateMinimapVisibility();
+}
+// Mouse wheel / trackpad: add up the scroll distance and zoom one level per 50 px, toward the pointer.
+// Small trackpad deltas add up; the sum is dropped after 200 ms without wheel events.
+$('#wrap').addEventListener('wheel', e => {   // the whole map box, so the minimap and buttons zoom too
+  e.preventDefault();
+  const now = performance.now();
+  if (now - wheelAt > 200) wheelAcc = 0;
+  wheelAt = now;
+  wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 600 : 1);
+  if (Math.abs(wheelAcc) >= 50) {
+    const p = canvasPoint(e.clientX, e.clientY);
+    zoomTo(cam.zi + (wheelAcc < 0 ? 1 : -1), p.x, p.y);
+    wheelAcc = 0;
+  }
+}, { passive: false });
+$('#zoomBar').addEventListener('pointerdown', e => e.preventDefault());   // keep the map's keyboard focus
+$('#btnZoomIn').onclick = () => zoomTo(cam.zi + 1);
+$('#btnZoomOut').onclick = () => zoomTo(cam.zi - 1);
+// ALL: whole world; pressed again, back to the zoom level from before.
+$('#btnZoomAll').onclick = () => {
+  if (cam.zi !== 0) { zoomBeforeAll = cam.zi; zoomTo(0); } else zoomTo(zoomBeforeAll);
+};
+// Map pointer input. A press acts on release (left button or touch), unless it moved CAM.DRAG_PX
+// screen px or more: then it is a drag that pans the map and never acts. Two touches pinch-zoom.
+let drag = null;            // { id, button, touch, sx, sy, lx, ly, moved, shift } for the press in progress
+const touches = new Map();  // pointerId -> { x, y } (client px) of touches on the map
+let pinchDist = 0;          // finger distance at the last pinch zoom step
+const touchDist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+// A finger wobbles more than a mouse, so a touch may move further and still be a tap.
+const slop = d => d.touch ? 10 : CAM.DRAG_PX;
+function endDrag() {
+  drag = null; touches.clear(); pinchDist = 0;
+  canvas.classList.remove('dragging');
+}
+// The release can get lost (window switch, a context menu): never leave the map stuck in a drag.
+canvas.addEventListener('lostpointercapture', e => { if (drag && e.pointerId === drag.id) endDrag(); });
+window.addEventListener('blur', () => { if (drag) endDrag(); });
 canvas.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
-  const c = cellFrom(e); if (!c) return;
-  actAt(c, e.shiftKey);
+  if (e.button === 1) e.preventDefault();   // no middle-click autoscroll
+  if (e.pointerType === 'touch') touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (drag && touches.size === 2) {         // a second finger: pinch, and the first press no longer acts
+    drag.moved = true; pinchDist = touchDist();
+    canvas.classList.add('dragging'); updateTooltip();
+    return;
+  }
+  if (drag) return;
+  drag = { id: e.pointerId, button: e.button, touch: e.pointerType === 'touch', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, shift: e.shiftKey };
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers cannot be captured */ }
 });
+canvas.addEventListener('pointermove', e => {
+  if (drag && !drag.touch && e.buttons === 0) endDrag();   // the mouse button was released somewhere we didn't hear
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (drag && touches.size === 2 && pinchDist > 0) {
+    if (e.pointerId === drag.id) { drag.lx = e.clientX; drag.ly = e.clientY; }   // no jump when one finger lifts
+    const d = touchDist(), [a, b] = [...touches.values()];
+    if (d >= pinchDist * 1.4 || d <= pinchDist / 1.4) {
+      const m = canvasPoint((a.x + b.x) / 2, (a.y + b.y) / 2);
+      zoomTo(cam.zi + (d > pinchDist ? 1 : -1), m.x, m.y);
+      pinchDist = d;
+    }
+    return;
+  }
+  if (drag && e.pointerId === drag.id) {
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) >= slop(drag)) {
+      drag.moved = true;
+      canvas.classList.add('dragging');
+    }
+    if (drag.moved && (e.clientX !== drag.lx || e.clientY !== drag.ly)) {
+      const k = VIEW_W / canvas.getBoundingClientRect().width;
+      CAM.panBy(cam, -(e.clientX - drag.lx) * k, -(e.clientY - drag.ly) * k);
+      if (follow) setFollow(false);   // dragging the map stops following (also after a pinch)
+    }
+    drag.lx = e.clientX; drag.ly = e.clientY;
+  }
+  hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY };
+  updateTooltip();
+});
+canvas.addEventListener('pointerup', e => {
+  touches.delete(e.pointerId);
+  if (!drag || e.pointerId !== drag.id) { if (drag && touches.size < 2) pinchDist = 0; return; }
+  if (drag.moved && touches.size === 1) {   // the first finger of a pinch lifted: the other one carries on panning
+    const [[id, p]] = [...touches];
+    drag.id = id; drag.lx = p.x; drag.ly = p.y; pinchDist = 0;
+    return;
+  }
+  const d = drag;
+  endDrag();
+  // A release far from the press is a drag even if no move event arrived in between.
+  if (!d.moved && d.button === 0 && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < slop(d)) {
+    const c = d.touch ? cellFromClient(d.sx, d.sy) : cellFrom(e);   // a tap acts where the finger landed
+    if (c) actAt(c, d.shift || e.shiftKey);
+  }
+  updateTooltip();
+});
+canvas.addEventListener('pointercancel', e => {
+  touches.delete(e.pointerId);
+  if (drag && e.pointerId === drag.id) endDrag();
+  updateTooltip();
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerleave', () => { if (drag) return; hover = null; lastMouse = null; updateTooltip(); });
 function actAt(c, shift) {
   Sfx.init();
   hover = c;
@@ -1813,6 +2107,7 @@ function actAt(c, shift) {
     } else { toast("NO ROOM HERE. TRY OPEN GRASSLAND"); Sfx.play('click'); }
   } else {
     const a = animalAt(c.x, c.y);
+    if ((a || null) !== selected) follow = false;
     selected = a || null;
     updateTracker(); updateTooltip();
   }
@@ -1822,13 +2117,16 @@ canvas.addEventListener('keydown', e => {
   const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!d && e.key !== 'Enter') return;
   e.preventDefault(); e.stopPropagation();
-  if (!hover) hover = { x: W >> 1, y: H >> 1 };
+  lastMouse = null;   // the keyboard owns the cursor until the mouse moves again
+  if (!hover) hover = viewCentreTile();
   if (d) {
     const n = e.shiftKey ? 5 : 1;
     hover = { x: Math.max(0, Math.min(W - 1, hover.x + d[0] * n)), y: Math.max(0, Math.min(H - 1, hover.y + d[1] * n)) };
+    CAM.ensureVisible(cam, hover.x, hover.y, 2);   // the camera scrolls to keep the cursor in view
   } else actAt(hover, e.shiftKey);
 });
-canvas.addEventListener('focus', () => { if (!hover) hover = { x: W >> 1, y: H >> 1 }; });
+const viewCentreTile = () => CAM.canvasToTile(cam, VIEW_W / 2, VIEW_H / 2);
+canvas.addEventListener('focus', () => { if (!hover) hover = viewCentreTile(); });
 canvas.addEventListener('blur', () => { if (!lastMouse) hover = null; });
 
 document.addEventListener('keydown', e => {
@@ -1842,7 +2140,7 @@ document.addEventListener('keydown', e => {
   if (k === ' ' && e.target !== document.body && e.target !== canvas && e.target.matches(':focus-visible')) return; // let Space press focused controls
   if (k === ' ') { e.preventDefault(); Sfx.init(); setRunning(!running); }
   else if (k >= '1' && k <= '5') setTool(+k - 1);
-  else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; updateTracker(); } }
+  else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; follow = false; updateTracker(); } }
   else if (k === '+' || k === '=') setSpeed(speedIdx + 1);
   else if (k === '-' || k === '_') setSpeed(speedIdx - 1);
   else if (k === 'v' || k === 'V') setView(viewMode + 1);
@@ -1850,7 +2148,20 @@ document.addEventListener('keydown', e => {
   else if (k === 'n' || k === 'N') openTitle();
   else if (k === 'h' || k === 'H' || k === '?') openHelp();
   else if (k === '.') { setRunning(false); GOL.step(world); }
+  else if (k.length === 1 && 'wasdWASD'.includes(k)) { heldPan.add(k.toLowerCase()); panFast = e.shiftKey; }
+  else if (k === 'f' || k === 'F') toggleFollow();
+  else if (k === 'z' || k === 'Z') zoomTo(cam.zi + 1);
+  else if (k === 'x' || k === 'X') zoomTo(cam.zi - 1);
 });
+
+// W A S D pan the map while held (Shift = faster); see frame().
+const heldPan = new Set(), PAN_SPEED = 600;   // canvas px per second
+let panFast = false;
+document.addEventListener('keyup', e => {
+  if (e.key.length === 1) heldPan.delete(e.key.toLowerCase());
+  panFast = e.shiftKey;
+});
+window.addEventListener('blur', () => heldPan.clear());
 
 // ---------------- title screen ----------------
 let titleCanClose = false, demo = true;
@@ -1907,7 +2218,8 @@ function newWorld(preset, isDemo) {
   world.rain = $('#rain').value / 100;
   world.seasons = $('#seasons').checked;
   prepWorldGfx();
-  particles = []; selected = null; hover = null;
+  resetCamera();
+  particles = []; selected = null; follow = false; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
@@ -1922,6 +2234,92 @@ function newWorld(preset, isDemo) {
     else log('A balanced savanna: buffalo, gazelles and hares graze while lions and cheetahs hunt.', 'good');
   }
   updateSidebar(); updateObjectives(); drawCharts();
+}
+
+// ---------------- minimap ----------------
+// The whole world at 2 x 2 tiles per minimap px. The base layer (terrain + animal dots) is rebuilt
+// every UI tick (250 ms); each frame adds the blinking tracked animal and the view rectangle.
+const MM_W = 160, MM_H = 100;
+const mmCanvas = $('#minimap'), mmCtx = mmCanvas.getContext('2d', { alpha: false });
+const mmImg = mmCtx.createImageData(MM_W, MM_H), mmBuf = new Uint32Array(mmImg.data.buffer);
+const mmBase = new Uint32Array(MM_W * MM_H);
+const MM_WATER = pack(hex('#2b66a6')), MM_TREE = pack(hex('#2f5e2a')), MM_ROCK = pack(hex('#878275'));
+const MM_GRASS = (() => {   // 16 steps from bare to full grass
+  const a = hex('#6b5236'), b = hex('#3c7a35');
+  return Array.from({ length: 16 }, (_, l) => pack(a.map((v, j) => Math.round(v + (b[j] - v) * l / 15))));
+})();
+const MM_SP = SPECIES.map(S => pack(hex(S.color)));
+let mmShown = false;
+function refreshMinimapBase() {
+  if (!world || !mmShown) return;
+  const ter = world.terrain, gr = world.grass;
+  for (let my = 0, o = 0; my < MM_H; my++) for (let mx = 0; mx < MM_W; mx++, o++) {
+    const i = (my * 2) * W + mx * 2, t = ter[i];
+    mmBase[o] = t === T_GRASS ? MM_GRASS[Math.max(0, Math.min(15, (gr[i] * 15 + 0.5) | 0))]
+      : t === T_WATER ? MM_WATER : t === T_TREE ? MM_TREE : MM_ROCK;
+  }
+  const A = world.animals;
+  for (let pass = 0; pass < 2; pass++) for (let k = 0; k < A.length; k++) {   // prey first, predators on top
+    const a = A[k];
+    if (a.alive && (a.sp >= 3) === (pass === 1)) mmBase[(a.y >> 1) * MM_W + (a.x >> 1)] = MM_SP[a.sp];
+  }
+}
+function drawMinimap() {
+  if (!mmShown) return;
+  mmBuf.set(mmBase);
+  if (selected && selected.alive && (frameNo >> 3) & 1) {
+    const x = Math.min(MM_W - 2, selected.x >> 1), y = Math.min(MM_H - 2, selected.y >> 1);
+    mmBuf[y * MM_W + x] = mmBuf[y * MM_W + x + 1] = mmBuf[(y + 1) * MM_W + x] = mmBuf[(y + 1) * MM_W + x + 1] = GOLD;
+  }
+  mmCtx.putImageData(mmImg, 0, 0);
+  const r = CAM.minimapViewRect(cam, MM_W, MM_H);
+  mmCtx.strokeStyle = '#fff'; mmCtx.lineWidth = 1;
+  mmCtx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.max(1, Math.round(r.w) - 1), Math.max(1, Math.round(r.h) - 1));
+}
+// Shown unless the whole world is already on the map, or the map is narrower than 600 px.
+function updateMinimapVisibility() {
+  const show = cam.zi !== 0 && $('#wrap').clientWidth >= 600;
+  if (show === mmShown) return;
+  mmShown = show;
+  mmCanvas.classList.toggle('show', show);
+  if (show) refreshMinimapBase();
+}
+// Click or drag on the minimap: centre the view there. It never acts on the world.
+let mmDragId = null;
+function minimapJump(e) {
+  const r = mmCanvas.getBoundingClientRect();
+  const t = CAM.minimapToTile(cam, (e.clientX - r.left) * MM_W / r.width, (e.clientY - r.top) * MM_H / r.height, MM_W, MM_H);
+  CAM.centerOn(cam, t.x, t.y);
+  follow = false;
+}
+mmCanvas.addEventListener('pointerdown', e => {
+  e.preventDefault(); e.stopPropagation();
+  mmDragId = e.pointerId;
+  try { mmCanvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers cannot be captured */ }
+  minimapJump(e);
+});
+mmCanvas.addEventListener('pointermove', e => { if (e.pointerId === mmDragId) { e.preventDefault(); e.stopPropagation(); minimapJump(e); } });
+for (const t of ['pointerup', 'pointercancel']) mmCanvas.addEventListener(t, e => { if (e.pointerId === mmDragId) { e.stopPropagation(); mmDragId = null; } });
+mmCanvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------- camera per frame ----------------
+let lastCamKey = '';
+function updateCamera(dt, overlay) {
+  if (heldPan.size && !overlay) {
+    const v = PAN_SPEED * (panFast ? 2.5 : 1) * dt;
+    const dx = (heldPan.has('d') ? 1 : 0) - (heldPan.has('a') ? 1 : 0), dy = (heldPan.has('s') ? 1 : 0) - (heldPan.has('w') ? 1 : 0);
+    if (dx || dy) { CAM.panBy(cam, dx * v, dy * v); follow = false; }
+  }
+  if (follow) {
+    if (!selected || !selected.alive) setFollow(false);
+    else CAM.centerOn(cam, selected.x, selected.y);
+  }
+  // When the view moved, keep the cursor honest: under the mouse, or (keyboard) pulled into view.
+  const r = CAM.srcRect(cam), key = r.x + ',' + r.y + ',' + cam.zi, changed = key !== lastCamKey;
+  lastCamKey = key;
+  if (changed && lastMouse && !(drag && drag.moved)) hover = cellFromClient(lastMouse.x, lastMouse.y);
+  // A keyboard cursor always stays fully in view, every frame (following can undo an arrow's scroll).
+  else if (hover && document.activeElement === canvas && (changed || !lastMouse)) hover = CAM.pullInside(cam, hover.x, hover.y);
 }
 
 // ---------------- main loop ----------------
@@ -1946,16 +2344,31 @@ function frame(now) {
   if (world) {
     if (!demo) processEvents(); else world.events.length = 0;
     updateParticles(dt);
-    render();
+    updateCamera(dt, titleOpen || helpOpen);
+    if (DEBUG) {
+      const t0 = performance.now();
+      render();
+      window.golDebug.renderMs += (performance.now() - t0 - window.golDebug.renderMs) * 0.1;
+    } else render();
+    drawMinimap();
     if (now - lastUi > 250) {
       lastUi = now;
       updateSidebar(); drawCharts();
+      updateMinimapVisibility(); refreshMinimapBase();
       if (!demo) { updateObjectives(); checkContextNotes(); }
       if (selected) { updateTracker(); if (!selected.alive && now - (selected._seenDead || (selected._seenDead = now)) > 6000) { selected = null; updateTracker(); } }
       updateTooltip();
     }
   }
 }
+
+// Test handle for tools/ui-check.js, only with ?debug in the URL.
+if (DEBUG) window.golDebug = {
+  CAM, cam, resetCamera, renderMs: 0,
+  get world() { return world; }, get hover() { return hover; }, get selected() { return selected; },
+  get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
+  setSelected(a) { selected = a; updateTracker(); }, setFollow, pickRadius,
+};
 
 buildSidebar();
 buildObjectives();
