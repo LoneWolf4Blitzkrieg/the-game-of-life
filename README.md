@@ -18,7 +18,7 @@ All three ways give the same game; the first two keep **multicore**:
 2. **Downloaded copy with a launcher (USB stick, ZIP, school network share).** Download the repository as a ZIP, unzip it, then double-click:
    - **Windows:** `Play Offline (Windows).bat` (uses built-in PowerShell, nothing to install).
    - **macOS:** `Play Offline (Mac).command` (needs Python 3; the first time, right-click → Open).
-   - **Linux:** `./play-offline.sh` (needs Python 3).
+   - **Linux:** `./play-offline.sh` (needs Python 3). To add it to your applications menu (under Games, with its icon), run `offline/install-linux-app.sh` once; remove it with `offline/install-linux-app.sh --uninstall`.
 
    It serves the game folder on that computer only (`http://localhost:8123`) and opens your browser. Keep its window open while you play.
 3. **Just open `index.html`.** Works anywhere, but browsers never allow multicore for files opened straight from disk, so it runs on one thread (with exactly the same results). Without internet the pixel fonts fall back to a plain font.
