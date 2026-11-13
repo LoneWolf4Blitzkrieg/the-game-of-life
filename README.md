@@ -32,6 +32,13 @@ Every birth needs a male and a female of the same species. Young predators follo
 - Rainfall slider and wet/dry seasons change how fast grass grows.
 - Complete the 8 objectives, read the field notes in the journal (they appear when something worth learning happens), and explore the **Ecology 101** tab.
 
+## Ways to play
+
+- **Daily Savanna:** everyone gets the same map each day (UTC). Keep it thriving for 5 years, get a Park Report, and copy your result to share.
+- **Park Rating (0–1000, grades S–D):** rewards diversity, keeping all species alive, steady populations over the last year, a light touch (few releases), and time survived. It shows live under the charts.
+- **Family names:** after releasing a couple, or with **NAME** on a tracked animal, give them a family name. Babies keep it; founders get name tags and descendants get little hearts on the map.
+- **Predict:** press **P** or **PREDICT** to guess whether a species will go up, stay about the same, or go down over the next year. The game fast-forwards, shows the answer with reasons, and keeps your streak. Prompts also pop up at season changes; switch them off under Environment.
+
 ## Concepts it teaches
 
 Food chains and energy pyramids · Lotka–Volterra predator–prey cycles · r- vs K-selection · carrying capacity and seasons · competition, intraguild predation and niche partitioning · prey switching · sexual reproduction, small populations and the Allee effect · trophic cascades · the Shannon biodiversity index.

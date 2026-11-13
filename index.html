@@ -1408,7 +1408,7 @@ let journalUnread = 0, notesShown = new Set(), objDone = {}, goalTrack = {};
 let lastYearSnap = null, milestones = {}, everHadPred = false, prevSeasonLogged = '';
 let runMode = 'balanced', dailyKey = '', resultsShown = false, everHadAnimals = false;
 let pred = null, predAutoAt = -1e9, wantAutoPredict = false;
-let famCounts = new Map(), famBirths = new Map();
+let famCounts = new Map(), famBirths = new Map(), famMax = new Map();
 
 const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
 // The camera picks the window of the world the map shows (see camera-core).
@@ -1590,9 +1590,9 @@ function render() {
 }
 // Named founders get a name tag; their descendants get a small heart. Hidden at whole-world zoom.
 function drawNameLabels() {
-  if (cam.zi === 0 || !world) return;
+  if (cam.zi === 0 || !world || !famCounts.size) return;
   const v = CAM.visibleTiles(cam), A = world.animals, tile = CELL * CAM.zoom(cam);
-  let tags = 0;
+  let tags = 0, hearts = 0;
   ctx.font = '8px "Press Start 2P", monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   for (let k = 0; k < A.length; k++) {
@@ -1605,7 +1605,7 @@ function drawNameLabels() {
       ctx.fillStyle = 'rgba(10,12,30,.85)'; ctx.fillRect(cx - (w >> 1), y - 11, w, 11);
       ctx.fillStyle = '#ff7ac8'; ctx.fillRect(cx - (w >> 1), y - 1, w, 1);
       ctx.fillStyle = '#fff'; ctx.fillText(a.fam, cx, y - 1);
-    } else {
+    } else if (hearts++ < 150) {
       const s = Math.max(1, Math.round(tile / 6)), hx = cx - 2 * s, hy = Math.round(p.y) - 4 * s - 1;
       ctx.fillStyle = '#ff7ac8';
       for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (HEART[yy][xx] === 'x') ctx.fillRect(hx + xx * s, hy + yy * s, s, s);
@@ -1775,8 +1775,8 @@ function processEvents() {
         break;
       case 'season':
         if (e.name === 'Dry season') { log('☀ The dry season begins. Grass growth slows.', ''); note('dry'); }
-        if ((e.name === 'Dry season' || e.name === 'Wet season') && world.tick > YEAR / 2 && world.tick - predAutoAt > YEAR * 2) wantAutoPredict = true;
         else if (e.name === 'Wet season') { log('☂ The rains arrive. Grass grows fast again.', ''); if (world.tick > YEAR / 2) note('wet'); }
+        if ((e.name === 'Dry season' || e.name === 'Wet season') && world.tick > YEAR / 2 && world.tick - predAutoAt > YEAR * 2) { wantAutoPredict = true; predAutoAt = world.tick; }
         break;
       case 'year': yearSummary(e.year); break;
     }
@@ -2310,7 +2310,7 @@ function newWorld(preset, isDemo) {
   resetCamera();
   particles = []; selected = null; follow = false; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
-  resultsShown = false; everHadAnimals = false; famCounts = new Map(); famBirths = new Map();
+  resultsShown = false; goneShown = false; everHadAnimals = false; famMax = new Map(); famCounts = new Map(); famBirths = new Map();
   if (pred) endPredict(true); wantAutoPredict = false; predAutoAt = -1e9; closeCard('nameCard');
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
@@ -2373,7 +2373,7 @@ function updateFamilies() {
   for (const a of world.animals) if (a.fam && a.alive) now.set(a.fam, (now.get(a.fam) || 0) + 1);
   for (const [f, n] of famCounts) if (n > 0 && !now.get(f))
     log(`The last of the <b style="color:var(--pink)">${f}</b> family has gone. Every family line ends one day, but the species carries on through others.`, '');
-  for (const [f, n] of now) for (const m of [10, 25, 50, 100]) if (n >= m && (famCounts.get(f) || 0) < m)
+  for (const [f, n] of now) for (const m of [10, 25, 50, 100]) if (n >= m && (famMax.get(f) || 0) < m && famMax.set(f, m))
     log(`♥ The <b style="color:var(--pink)">${f}</b> family has grown to ${m}!`, 'good');
   famCounts = now;
 }
@@ -2406,7 +2406,7 @@ function parkRating() {
 }
 
 // ---------------- daily savanna ----------------
-function todayKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function todayKey() { return new Date().toISOString().slice(0, 10); }   // UTC: the same map worldwide
 function dailySeed(key) { let h = 2166136261; for (const ch of 'gol-daily-' + key) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) % 1e9; }
 function bestKey() { return runMode === 'daily' ? 'best.daily.' + dailyKey : 'best.' + runMode; }
 function refreshDailyChoice() {
@@ -2418,21 +2418,21 @@ function refreshDailyChoice() {
 
 // ---------------- results ----------------
 function showResults(reason) {
-  resultsShown = true;
+  if (reason === 'years') resultsShown = true; else goneShown = true;   // an empty park can still reach its 5-year report
   const r = parkRating(), key = bestKey(), prev = storage.get(key, null);
-  const isBest = !prev || r.total > prev.total;
+  const isBest = reason === 'years' && (!prev || r.total > prev.total);
   if (isBest) storage.set(key, { total: r.total, grade: r.grade });
   const title = reason === 'gone' ? 'EVERY ANIMAL IS GONE' : runMode === 'daily' ? `DAILY SAVANNA · ${dailyKey}` : 'FIVE YEARS OF YOUR PARK';
   $('#resBody').innerHTML = `<div class="sub" style="margin:0">${title}</div>
     <div class="big-score">${r.total} <span class="grade" style="font-size:14px">${r.grade}</span></div>
-    <div style="color:${isBest ? 'var(--green)' : 'var(--muted)'}">${isBest ? (prev ? `★ New personal best! (was ${prev.total})` : '★ First score saved!') : `Personal best: ${prev.total} (${prev.grade})`}</div>
+    <div style="color:${isBest ? 'var(--green)' : 'var(--muted)'}">${isBest ? (prev ? `★ New personal best! (was ${prev.total})` : '★ First score saved!') : prev ? `Personal best: ${prev.total} (${prev.grade})` : 'Scores are saved at the 5-year report.'}</div>
     <div class="rate-parts">${Object.entries(r.parts).map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join('')}</div>
     <p class="hint" style="text-align:center">${reason === 'gone' ? 'An empty savanna can be refilled: release couples and try again.' : runMode === 'daily' ? 'Come back tomorrow for a new savanna. You can keep playing this one.' : 'Your park keeps going if you want to keep watching.'}</p>`;
   const S = SPECIES;
   $('#shareText').value = `THE GAME OF LIFE · ${runMode === 'daily' ? 'Daily Savanna ' + dailyKey : runMode === 'empty' ? 'Empty Land' : 'Balanced Savanna'}\n` +
     `Park Rating ${r.total} (${r.grade}) after ${Math.floor(world.tick / YEAR)} year${Math.floor(world.tick / YEAR) === 1 ? '' : 's'}\n` +
     S.map((s, i) => `${s.plural} ${world.counts[i]}`).join(' · ') + '\n' +
-    `${r.alive}/5 species · ${r.couples} couple${r.couples === 1 ? '' : 's'} released\n` + location.origin + location.pathname;
+    `${r.alive}/5 species · ${r.couples} couple${r.couples === 1 ? '' : 's'} released` + (/^https?:$/.test(location.protocol) ? '\n' + location.origin + location.pathname : '');
   wasRunningRes = running; setRunning(false);
   $('#resultsScreen').classList.add('show'); setInert();
   $('#btnShare').textContent = 'COPY RESULT';
@@ -2440,10 +2440,10 @@ function showResults(reason) {
   Sfx.play('goal');
   log(`📋 Park report: rating <b>${r.total} (${r.grade})</b>.`, 'gold');
 }
-let wasRunningRes = false;
-function closeResults() { $('#resultsScreen').classList.remove('show'); setInert(); setRunning(true); canvas.focus({ preventScroll: true }); }
+let wasRunningRes = false, goneShown = false;
+function closeResults() { $('#resultsScreen').classList.remove('show'); setInert(); setRunning(wasRunningRes); canvas.focus({ preventScroll: true }); }
 $('#btnKeep').onclick = closeResults;
-$('#btnResNew').onclick = () => { $('#resultsScreen').classList.remove('show'); openTitle(); };
+$('#btnResNew').onclick = () => { $('#resultsScreen').classList.remove('show'); running = wasRunningRes; openTitle(); };
 $('#btnShare').onclick = async () => {
   const t = $('#shareText');
   try { await navigator.clipboard.writeText(t.value); }
@@ -2453,9 +2453,9 @@ $('#btnShare').onclick = async () => {
 function checkRunEnd() {
   if (demo || resultsShown || !world) return;
   const tot = sumArr(world.counts);
-  if (tot > 0) everHadAnimals = true;
+  if (tot > 0) { everHadAnimals = true; goneShown = false; }
   if (world.tick >= YEAR * 5) showResults('years');
-  else if (everHadAnimals && tot === 0 && world.tick > 30) showResults('gone');
+  else if (everHadAnimals && tot === 0 && world.tick > 30 && !goneShown) showResults('gone');
 }
 
 // ---------------- predict-then-watch ----------------
@@ -2499,10 +2499,15 @@ function startWatch(choice) {
 function renderWatch() {
   const el = $('#predCard'); if (!el || !pred) return;
   const S = SPECIES[pred.sp], f = Math.min(1, (world.tick - pred.t0) / YEAR);
-  el.innerHTML = `<h3>WATCHING THE ${S.plural.toUpperCase()}… (16×)</h3>
-    <p>You said <b>${pred.choice.toUpperCase()}</b>. Now: ${world.counts[pred.sp]} (started at ${pred.start})</p>
-    <div class="meterline"><i style="width:${(f * 100).toFixed(0)}%"></i></div>
-    <div class="opts"><button class="btn" data-stop="1">STOP WATCHING</button></div>`;
+  if (!el.querySelector('.watch')) {   // build once; later calls only update the numbers
+    el.innerHTML = `<div class="watch" aria-live="off"><h3>WATCHING THE ${S.plural.toUpperCase()}… (16×)</h3>
+      <p>You said <b>${pred.choice.toUpperCase()}</b>. Now: <span class="now"></span> (started at ${pred.start})</p>
+      <div class="meterline"><i></i></div>
+      <div class="opts"><button class="btn" data-stop="1">STOP WATCHING</button></div></div>`;
+    el.querySelector('[data-stop]').focus({ preventScroll: true });
+  }
+  el.querySelector('.now').textContent = world.counts[pred.sp];
+  el.querySelector('.meterline i').style.width = (f * 100).toFixed(0) + '%';
 }
 function resolvePredict() {
   const sp = pred.sp, S = SPECIES[sp], end = world.counts[sp], start = pred.start;
@@ -2533,6 +2538,7 @@ function resolvePredict() {
     <p>Why? ${why.join('; ').replace(/^./, c => c.toUpperCase())}.</p>
     <p style="color:var(--muted)">Streak: ${st.streak} · best ${st.best}</p>
     <div class="opts"><button class="btn" data-done="1">OK</button></div>`;
+  if (el) el.querySelector('[data-done]').focus({ preventScroll: true });
   log(`🔮 Prediction: you said ${pred.choice} ${S.plural.toLowerCase()}; it was ${outcome} (${start} → ${end}). ${right ? 'Correct!' : 'Not this time.'} Why: ${why.join('; ')}.`, right ? 'good' : '');
   if (right) Sfx.play('goal'); else Sfx.play('click');
   setSpeed(pred.speed);
@@ -2540,8 +2546,8 @@ function resolvePredict() {
 }
 function endPredict(cancel) {
   if (pred) {
-    if (pred.phase === 'watch' || pred.phase === 'ask') setSpeed(pred.speed);
-    if (pred.phase === 'ask') setRunning(pred.wasRunning);
+    if (pred.phase === 'watch') setSpeed(pred.speed);
+    setRunning(pred.wasRunning);
   }
   pred = null; closeCard('predCard'); canvas.focus({ preventScroll: true });
 }
@@ -2663,7 +2669,7 @@ function frame(now) {
   if (world) {
     if (!demo) processEvents(); else world.events.length = 0;
     updateParticles(dt);
-    updateCamera(dt, titleOpen || helpOpen);
+    updateCamera(dt, titleOpen || helpOpen || resOpen);
     if (DEBUG) {
       const t0 = performance.now();
       render();
