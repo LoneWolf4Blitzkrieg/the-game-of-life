@@ -1153,7 +1153,9 @@ if (typeof module !== 'undefined') module.exports = CAM;
 (() => {
 'use strict';
 const { W, H, SPECIES, YEAR, T_GRASS, T_WATER, T_TREE, T_ROCK } = GOL;
-const CELL = 6, PW = W * CELL, PH = H * CELL;
+const CELL = 6, PW = W * CELL, PH = H * CELL;   // PW x PH: the whole world in world px
+const VIEW_W = 960, VIEW_H = 600;                 // the map canvas, in canvas px
+const DEBUG = /[?&]debug\b/.test(location.search);
 const $ = s => document.querySelector(s);
 const storage = {
   get(k, d) { try { const v = localStorage.getItem('gol.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -1343,10 +1345,18 @@ let journalUnread = 0, notesShown = new Set(), objDone = {}, goalTrack = {};
 let lastYearSnap = null, milestones = {}, everHadPred = false, prevSeasonLogged = '';
 
 const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
-canvas.width = PW; canvas.height = PH; // TEMPORARY (bigger-world Task 1): whole world squeezed into the map; Task 3 replaces this with the camera
-const img = ctx.createImageData(PW, PH);
-const frameBuf = new Uint32Array(img.data.buffer);
+// The camera picks the window of the world the map shows (see camera-core).
+const startCam = () => CAM.create({ worldW: W, worldH: H, cell: CELL, viewW: VIEW_W, viewH: VIEW_H });
+const cam = startCam();
+let follow = false;   // camera follows the tracked animal
+function resetCamera() { Object.assign(cam, startCam()); }   // 1x, centred on the middle of the world
+// terrainBuf holds the whole world's terrain (world px). Each frame, beginView() copies the camera's
+// window into frameBuf (VW x VH world px, top-left at VX, VY); sprites and particles are drawn on top,
+// and the window is scaled onto the map canvas with nearest-neighbour scaling.
 const terrainBuf = new Uint32Array(PW * PH);
+const viewCanvas = document.createElement('canvas'), vctx = viewCanvas.getContext('2d', { alpha: false });
+let viewImg = null, frameBuf = null, VX = 0, VY = 0, VW = 0, VH = 0;
+let PXB = 1;   // setPx block size: 2 at whole-world zoom, so 1-px lines survive the 2:1 downscale
 const lastKey = new Int32Array(W * H);
 let cellVar = new Uint8Array(W * H), waterDeep = new Uint8Array(W * H);
 
@@ -1402,11 +1412,26 @@ function blend(d, s, red) {
   if (red) { r = 255; g = 60; b = 60; }
   return ((255 << 24) | ((((d >>> 16) & 255) + b) >> 1 << 16) | ((((d >>> 8) & 255) + g) >> 1 << 8) | (((d & 255) + r) >> 1)) >>> 0;
 }
+// Start a frame: copy the camera's window of the terrain into frameBuf.
+function beginView() {
+  const r = CAM.srcRect(cam);
+  if (r.w !== VW || r.h !== VH) {
+    viewCanvas.width = r.w; viewCanvas.height = r.h;
+    viewImg = vctx.createImageData(r.w, r.h);
+    frameBuf = new Uint32Array(viewImg.data.buffer);
+  }
+  VX = r.x; VY = r.y; VW = r.w; VH = r.h;
+  PXB = CAM.zoom(cam) < 1 ? 2 : 1;
+  if (VW === PW) frameBuf.set(terrainBuf.subarray(VY * PW, (VY + VH) * PW));
+  else for (let y = 0, s = VY * PW + VX; y < VH; y++, s += PW) frameBuf.set(terrainBuf.subarray(s, s + VW), y * VW);
+}
+// Draw a 6x6 sprite on tile (cx, cy), clipped to the view window.
 function drawSprite(off, cx, cy, ghost, red) {
-  const base = cy * CELL * PW + cx * CELL;
-  for (let py = 0; py < 6; py++) {
-    const row = base + py * PW, so = off + py * 6;
-    for (let px = 0; px < 6; px++) {
+  const x0 = cx * CELL - VX, y0 = cy * CELL - VY;
+  const pxA = Math.max(0, -x0), pxB = Math.min(6, VW - x0), pyA = Math.max(0, -y0), pyB = Math.min(6, VH - y0);
+  for (let py = pyA; py < pyB; py++) {
+    const row = (y0 + py) * VW + x0, so = off + py * 6;
+    for (let px = pxA; px < pxB; px++) {
       const c = sprites[so + px];
       if (!c) continue;
       const idx = row + px;
@@ -1415,10 +1440,19 @@ function drawSprite(off, cx, cy, ghost, red) {
     }
   }
 }
+// Set one world px. At whole-world zoom (PXB 2) fill its even-aligned 2x2 block instead,
+// so outlines and particles still show after the 2:1 downscale.
 function setPx(x, y, c) {
-  x |= 0; y |= 0;
-  if (x < 0 || y < 0 || x >= PW || y >= PH) return;
-  frameBuf[y * PW + x] = c;
+  x = (x | 0) - VX; y = (y | 0) - VY;
+  if (PXB === 1) {
+    if (x < 0 || y < 0 || x >= VW || y >= VH) return;
+    frameBuf[y * VW + x] = c;
+  } else {
+    x &= ~1; y &= ~1;
+    if (x < 0 || y < 0 || x + 1 >= VW || y + 1 >= VH) return;
+    const i = y * VW + x;
+    frameBuf[i] = frameBuf[i + 1] = frameBuf[i + VW] = frameBuf[i + VW + 1] = c;
+  }
 }
 function rectOutline(x0, y0, w, h, c, gapCorners) {
   for (let x = x0; x < x0 + w; x++) {
@@ -1437,11 +1471,12 @@ const HEART = ['.x.x.', 'xxxxx', '.xxx.', '..x..'];
 function render() {
   frameNo++;
   updateTerrain();
-  frameBuf.set(terrainBuf);
-  const A = world.animals;
+  beginView();
+  const A = world.animals, v = CAM.visibleTiles(cam);
+  const x0 = v.x0 - 1, y0 = v.y0 - 1, x1 = v.x1 + 1, y1 = v.y1 + 1;
   for (let k = 0; k < A.length; k++) {
     const a = A[k];
-    if (!a.alive) continue;
+    if (!a.alive || a.x < x0 || a.x > x1 || a.y < y0 || a.y > y1) continue;
     const S = SPECIES[a.sp];
     let v = 0;
     if (viewMode === 1) v = 1;
@@ -1481,7 +1516,9 @@ function render() {
       rectOutline(hover.x * CELL - 1, hover.y * CELL - 1, CELL + 2, CELL + 2, pack([255, 255, 255]), true);
     }
   }
-  ctx.putImageData(img, 0, 0);
+  vctx.putImageData(viewImg, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(viewCanvas, 0, 0, VW, VH, 0, 0, VIEW_W, VIEW_H);
 }
 
 // ---------------- particles ----------------
@@ -1877,12 +1914,17 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   if (t.dataset.tab === 'journal') { journalUnread = 0; $('#jBadge').style.display = 'none'; }
 });
 
-function cellFrom(e) {
+// Client (screen) px -> canvas px of the 960 x 600 map (the canvas is CSS-scaled).
+function canvasPoint(clientX, clientY) {
   const r = canvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX - r.left) / r.width * W), y = Math.floor((e.clientY - r.top) / r.height * H);
-  if (x < 0 || y < 0 || x >= W || y >= H) return null;
-  return { x, y };
+  return { x: (clientX - r.left) / r.width * VIEW_W, y: (clientY - r.top) / r.height * VIEW_H };
 }
+// The tile under a client point, or null off the map.
+function cellFromClient(clientX, clientY) {
+  const p = canvasPoint(clientX, clientY);
+  return CAM.canvasToTile(cam, p.x, p.y);
+}
+const cellFrom = e => cellFromClient(e.clientX, e.clientY);
 canvas.addEventListener('pointermove', e => { hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY }; updateTooltip(); });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
@@ -2009,6 +2051,7 @@ function newWorld(preset, isDemo) {
   world.rain = $('#rain').value / 100;
   world.seasons = $('#seasons').checked;
   prepWorldGfx();
+  resetCamera();
   particles = []; selected = null; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
@@ -2048,7 +2091,11 @@ function frame(now) {
   if (world) {
     if (!demo) processEvents(); else world.events.length = 0;
     updateParticles(dt);
-    render();
+    if (DEBUG) {
+      const t0 = performance.now();
+      render();
+      window.golDebug.renderMs += (performance.now() - t0 - window.golDebug.renderMs) * 0.1;
+    } else render();
     if (now - lastUi > 250) {
       lastUi = now;
       updateSidebar(); drawCharts();
@@ -2058,6 +2105,13 @@ function frame(now) {
     }
   }
 }
+
+// Test handle for tools/ui-check.js, only with ?debug in the URL.
+if (DEBUG) window.golDebug = {
+  CAM, cam, resetCamera, renderMs: 0,
+  get world() { return world; }, get hover() { return hover; }, get selected() { return selected; },
+  get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
+};
 
 buildSidebar();
 buildObjectives();
