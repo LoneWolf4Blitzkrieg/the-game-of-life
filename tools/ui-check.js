@@ -127,6 +127,51 @@
     return `render ms: 1x ${one.toFixed(2)}, whole world ${whole.toFixed(2)}`;
   });
 
+  // ---------- group: zoom (Task 4) ----------
+  const zoomText = () => document.querySelector('#zoomText').textContent;
+  add('zoom', 'Z zooms in, X zooms out', async () => {
+    const seq = [];
+    for (const k of ['z', 'x', 'x', 'x']) { key(k); seq.push(D.cam.zi); }
+    check(same(seq, [2, 1, 0, 0]), 'zi after z,x,x,x: ' + seq);
+  });
+  add('zoom', 'wheel zooms toward the pointer', async () => {
+    const t = CAM.canvasToTile(D.cam, 240, 150);
+    wheel(240, 150, -120);
+    check(D.cam.zi === 2, 'zi ' + D.cam.zi);
+    const u = CAM.canvasToTile(D.cam, 240, 150);
+    check(same(u, t), `tile under pointer ${JSON.stringify(t)} -> ${JSON.stringify(u)}`);
+  });
+  add('zoom', 'wheel over the map does not scroll the page', async () => {
+    const notCancelled = wheel(480, 300, 120);
+    check(notCancelled === false, 'wheel event was not preventDefault()ed');
+  });
+  add('zoom', 'small trackpad deltas accumulate', async () => {
+    for (let i = 0; i < 4; i++) wheel(480, 300, -10);
+    check(D.cam.zi === 1, 'zi after 4 small deltas ' + D.cam.zi);
+    wheel(480, 300, -10);
+    check(D.cam.zi === 2, 'zi after 5 small deltas ' + D.cam.zi);
+  });
+  add('zoom', 'ALL toggles whole world and back', async () => {
+    key('z');
+    document.querySelector('#btnZoomAll').click();
+    check(D.cam.zi === 0, 'zi after ALL ' + D.cam.zi);
+    document.querySelector('#btnZoomAll').click();
+    check(D.cam.zi === 2, 'zi after ALL again ' + D.cam.zi);
+  });
+  add('zoom', 'zoom text shows the level', async () => {
+    key('z');
+    check(zoomText().includes('2×'), 'text at zi 2: ' + zoomText());
+    key('x'); key('x');
+    check(zoomText().includes('WHOLE WORLD'), 'text at zi 0: ' + zoomText());
+  });
+  add('zoom', 'zoom keys ignored while help is open', async () => {
+    key('h');
+    check(document.querySelector('#helpScreen').classList.contains('show'), 'help did not open');
+    key('z');
+    check(D.cam.zi === 1, 'zi changed under help: ' + D.cam.zi);
+    key('Escape');
+  });
+
   // ---------- runner ----------
   window.uiCheck = async group => {
     await setup();

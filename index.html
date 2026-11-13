@@ -75,6 +75,9 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 .statusbar b{color:var(--text);font-weight:normal}
 .legend-energy{display:inline-flex;align-items:center;gap:6px}
 .legend-energy i{display:inline-block;width:70px;height:10px;background:linear-gradient(90deg,#ff3b3b,#ffd23f,#4dff6a);border:1px solid #000}
+#zoomBar{position:absolute;top:8px;right:8px;z-index:4;display:flex;gap:4px}
+#zoomBar .btn{padding:6px 8px;min-width:30px}
+#zoomBar .btn:disabled{opacity:.4;cursor:default}
 #pausedTag{position:absolute;top:8px;left:8px;font-family:var(--px);font-size:9px;background:rgba(5,6,15,.8);
   padding:6px 8px;border:2px solid var(--gold);color:var(--gold);display:none;pointer-events:none}
 #pausedTag.show{display:block;animation:blink 1s steps(2) infinite}
@@ -230,6 +233,11 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
     <section class="panel stage">
       <div class="canvas-wrap" id="wrap">
         <canvas id="world" width="960" height="600" tabindex="0" aria-label="Savanna world map. Click, or focus it and use the arrow keys and Enter, to release a couple or inspect animals."></canvas>
+        <div id="zoomBar" role="group" aria-label="Zoom">
+          <button class="btn" id="btnZoomOut" title="Zoom out (X or mouse wheel)" aria-label="Zoom out">−</button>
+          <button class="btn" id="btnZoomIn" title="Zoom in (Z or mouse wheel)" aria-label="Zoom in">+</button>
+          <button class="btn" id="btnZoomAll" title="Whole world (press again to go back)">ALL</button>
+        </div>
         <div id="pausedTag">PAUSED</div>
         <div id="tooltip"></div>
         <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div></div>
@@ -237,6 +245,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       </div>
       <div class="statusbar">
         <span id="toolText">Tool: <b>Inspect</b></span>
+        <span id="zoomText">Zoom <b>1×</b></span>
         <span id="viewLegend"></span>
         <span>Seed <b id="seedText">—</b></span>
       </div>
@@ -1349,7 +1358,8 @@ const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
 const startCam = () => CAM.create({ worldW: W, worldH: H, cell: CELL, viewW: VIEW_W, viewH: VIEW_H });
 const cam = startCam();
 let follow = false;   // camera follows the tracked animal
-function resetCamera() { Object.assign(cam, startCam()); }   // 1x, centred on the middle of the world
+let wheelAcc = 0, wheelAt = 0, zoomBeforeAll = 1;   // zoom input state (see zoomTo)
+function resetCamera() { Object.assign(cam, startCam()); wheelAcc = 0; zoomBeforeAll = 1; updateZoomUI(); }   // 1x, centred on the middle of the world
 // terrainBuf holds the whole world's terrain (world px). Each frame, beginView() copies the camera's
 // window into frameBuf (VW x VH world px, top-left at VX, VY); sprites and particles are drawn on top,
 // and the window is scaled onto the map canvas with nearest-neighbour scaling.
@@ -1925,6 +1935,41 @@ function cellFromClient(clientX, clientY) {
   return CAM.canvasToTile(cam, p.x, p.y);
 }
 const cellFrom = e => cellFromClient(e.clientX, e.clientY);
+
+// ---------------- zoom ----------------
+const ZOOM_LABELS = ['WHOLE WORLD', '1×', '2×', '3×'];
+// Zoom to level zi (clamped), keeping the world point under canvas point (ax, ay) in place.
+function zoomTo(zi, ax, ay) {
+  CAM.setZoom(cam, zi, ax, ay);
+  updateZoomUI();
+}
+function updateZoomUI() {
+  const zt = $('#zoomText');
+  if (!zt) return;
+  zt.innerHTML = `Zoom <b>${ZOOM_LABELS[cam.zi]}</b>`;
+  $('#btnZoomIn').disabled = cam.zi >= CAM.ZOOMS.length - 1;
+  $('#btnZoomOut').disabled = cam.zi <= 0;
+}
+// Mouse wheel / trackpad: add up the scroll distance and zoom one level per 50 px, toward the pointer.
+// Small trackpad deltas add up; the sum is dropped after 200 ms without wheel events.
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const now = performance.now();
+  if (now - wheelAt > 200) wheelAcc = 0;
+  wheelAt = now;
+  wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 600 : 1);
+  if (Math.abs(wheelAcc) >= 50) {
+    const p = canvasPoint(e.clientX, e.clientY);
+    zoomTo(cam.zi + (wheelAcc < 0 ? 1 : -1), p.x, p.y);
+    wheelAcc = 0;
+  }
+}, { passive: false });
+$('#btnZoomIn').onclick = () => zoomTo(cam.zi + 1);
+$('#btnZoomOut').onclick = () => zoomTo(cam.zi - 1);
+// ALL: whole world; pressed again, back to the zoom level from before.
+$('#btnZoomAll').onclick = () => {
+  if (cam.zi !== 0) { zoomBeforeAll = cam.zi; zoomTo(0); } else zoomTo(zoomBeforeAll);
+};
 canvas.addEventListener('pointermove', e => { hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY }; updateTooltip(); });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
@@ -1994,6 +2039,8 @@ document.addEventListener('keydown', e => {
   else if (k === 'n' || k === 'N') openTitle();
   else if (k === 'h' || k === 'H' || k === '?') openHelp();
   else if (k === '.') { setRunning(false); GOL.step(world); }
+  else if (k === 'z' || k === 'Z') zoomTo(cam.zi + 1);
+  else if (k === 'x' || k === 'X') zoomTo(cam.zi - 1);
 });
 
 // ---------------- title screen ----------------
