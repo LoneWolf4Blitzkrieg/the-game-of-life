@@ -1,0 +1,1913 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Game of Life</title>
+<meta name="description" content="An educational 16-bit predator–prey ecosystem simulation.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d1c; --bg2:#121530; --panel:#171b38; --panel2:#1e2347; --edge:#05060f;
+  --hi:#3c4590; --lo:#0d1030; --text:#ecebff; --muted:#9ca2d6; --dim:#6a70a8;
+  --gold:#ffd23f; --teal:#4fe0c8; --red:#ff4d5e; --green:#6cff8a; --blue:#5aa9ff; --pink:#ff7ac8;
+  --px:'Press Start 2P', ui-monospace, monospace; --tx:'VT323', ui-monospace, monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg);
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size:8px 8px;
+  color:var(--text); font-family:var(--tx); font-size:20px; line-height:1.15;
+  -webkit-font-smoothing:none; overflow-x:hidden;
+}
+button,input{font:inherit;color:inherit}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges}
+.px{font-family:var(--px)}
+#app{max-width:1500px;margin:0 auto;padding:10px 16px 24px;display:flex;flex-direction:column;gap:12px}
+
+/* ---------- 16-bit panels & buttons ---------- */
+.panel{
+  background:var(--panel); border:3px solid var(--edge);
+  box-shadow: inset 2px 2px 0 var(--hi), inset -2px -2px 0 var(--lo), 0 4px 0 var(--edge);
+  padding:10px 12px;
+}
+.panel h2{font-family:var(--px);font-size:10px;letter-spacing:1px;color:var(--gold);margin:0 0 10px;
+  text-shadow:2px 2px 0 #3a2a00;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.btn{
+  font-family:var(--px); font-size:9px; line-height:1; cursor:pointer; user-select:none;
+  background:#2a3172; color:#fff; border:2px solid var(--edge); padding:8px 10px;
+  box-shadow: inset 2px 2px 0 #5663c4, inset -2px -2px 0 #161a48;
+  white-space:nowrap;
+}
+.btn:hover{background:#333c88}
+.btn:active,.btn.on{box-shadow: inset -2px -2px 0 #5663c4, inset 2px 2px 0 #161a48; transform:translateY(1px)}
+.btn.on{background:#3d2f8a}
+.btn.gold{background:#7a5a00;box-shadow: inset 2px 2px 0 #d1a51c, inset -2px -2px 0 #3d2c00}
+.btn.gold:hover{background:#8f6a00}
+.btn:focus-visible,.sp-btn:focus-visible,.legend-item:focus-visible,.tab:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+/* ---------- top bar ---------- */
+.topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logo{font-family:var(--px);font-size:16px;line-height:1.3;margin:0;color:#fff;
+  text-shadow:2px 2px 0 #e0457b, 4px 4px 0 #3b1d6e;white-space:nowrap}
+.logo small{display:block;font-size:7px;color:var(--teal);text-shadow:1px 1px 0 #0a3a33;letter-spacing:2px;margin-top:4px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:1}
+.chip{font-family:var(--px);font-size:8px;padding:7px 9px;background:var(--bg2);border:2px solid var(--edge);
+  box-shadow: inset 1px 1px 0 var(--hi);white-space:nowrap}
+.chip b{color:var(--gold);font-weight:normal}
+.controls{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ---------- layout ---------- */
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
+.stage{padding:8px}
+.canvas-wrap{position:relative;margin:0 auto;max-width:calc((100vh - 150px) * 1.6);background:#000;border:2px solid var(--edge)}
+#world{display:block;width:100%;height:auto;aspect-ratio:960/600;cursor:crosshair;touch-action:none}
+.statusbar{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:18px}
+.statusbar b{color:var(--text);font-weight:normal}
+.legend-energy{display:inline-flex;align-items:center;gap:6px}
+.legend-energy i{display:inline-block;width:70px;height:10px;background:linear-gradient(90deg,#ff3b3b,#ffd23f,#4dff6a);border:1px solid #000}
+#pausedTag{position:absolute;top:8px;left:8px;font-family:var(--px);font-size:9px;background:rgba(5,6,15,.8);
+  padding:6px 8px;border:2px solid var(--gold);color:var(--gold);display:none;pointer-events:none}
+#pausedTag.show{display:block;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.35}}
+#tooltip,#tracker{position:absolute;pointer-events:none;background:rgba(10,12,30,.94);border:2px solid var(--edge);
+  box-shadow: inset 1px 1px 0 var(--hi), 0 3px 0 #000;padding:6px 8px;font-size:18px;min-width:170px;display:none;z-index:5}
+#tracker{left:8px;bottom:8px;pointer-events:auto;border-color:var(--gold)}
+#tracker .x{position:absolute;right:4px;top:2px;cursor:pointer;color:var(--muted);background:none;border:0;font-size:18px}
+.tt-head{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.tt-head img{width:24px;height:24px;image-rendering:pixelated}
+.tt-role{color:var(--muted);font-size:16px}
+.bar{display:inline-block;width:80px;height:8px;background:#000;border:1px solid #333a70;vertical-align:middle;margin-right:4px}
+.bar i{display:block;height:100%}
+.male{color:var(--blue)} .female{color:var(--pink)}
+#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-family:var(--px);font-size:9px;line-height:1.5;
+  background:rgba(10,12,30,.95);border:2px solid var(--gold);padding:8px 12px;color:#fff;display:none;z-index:6;text-align:center;max-width:90%}
+#toast.show{display:block;animation:pop .25s steps(3)}
+@keyframes pop{from{transform:translate(-50%,-8px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+
+/* ---------- sidebar ---------- */
+.side{display:flex;flex-direction:column;gap:12px}
+.sp-grid{display:grid;grid-template-columns:1fr;gap:6px}
+.sp-btn{display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:8px;text-align:left;cursor:pointer;
+  background:var(--panel2);border:2px solid var(--edge);padding:4px 8px;box-shadow: inset 2px 2px 0 #2f3670, inset -2px -2px 0 #11142f}
+.sp-btn:hover{background:#262c58}
+.sp-btn.on{background:#3a2f12;border-color:var(--gold);box-shadow: inset 2px 2px 0 #8a6a12, inset -2px -2px 0 #1d1606}
+.sp-btn img{width:36px;height:36px;image-rendering:pixelated}
+.sp-btn .nm{font-family:var(--px);font-size:9px;display:block;margin-bottom:3px}
+.sp-btn small{color:var(--muted);font-size:16px}
+.sp-btn .cnt{font-family:var(--px);font-size:9px;text-align:right;line-height:1.6}
+.sp-btn .cnt span{display:block;font-size:7px;color:var(--muted)}
+.sp-btn.inspect{grid-template-columns:36px 1fr}
+.sp-btn.inspect .ico{width:36px;height:36px;display:grid;place-items:center;font-family:var(--px);font-size:14px;color:var(--teal)}
+.hint{color:var(--muted);font-size:17px;margin:8px 0 0}
+kbd{font-family:var(--px);font-size:7px;background:#000;border:1px solid #444b8a;padding:2px 4px;color:#fff}
+
+.chart-box{margin-bottom:8px}
+.chart-label{display:flex;justify-content:space-between;font-family:var(--px);font-size:7px;color:var(--muted);margin-bottom:4px}
+.chart-box canvas{width:100%;height:auto;aspect-ratio:240/72;display:block;border:2px solid var(--edge);background:#070918}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px}
+.legend-item{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:18px;background:none;border:0;padding:0;text-align:left}
+.legend-item i{width:10px;height:10px;border:1px solid #000;flex:none}
+.legend-item.off{opacity:.35;text-decoration:line-through}
+.legend-item b{margin-left:auto;font-weight:normal;color:var(--gold)}
+.meter{height:12px;background:#000;border:2px solid var(--edge);margin:6px 0 2px;position:relative}
+.meter i{display:block;height:100%;background:repeating-linear-gradient(90deg,var(--teal) 0 6px,#2fae9b 6px 8px);transition:width .3s steps(6)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0}
+.row label{color:var(--muted)}
+input[type=range]{width:150px;accent-color:var(--gold)}
+input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
+
+/* ---------- tabs ---------- */
+.tabs-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tab{font-family:var(--px);font-size:9px;padding:9px 10px;background:var(--panel2);border:2px solid var(--edge);cursor:pointer;color:var(--muted);
+  box-shadow: inset 2px 2px 0 #2f3670}
+.tab.on{color:var(--gold);background:#2a2350;border-color:var(--gold)}
+.tab .badge{display:inline-block;background:var(--red);color:#fff;font-size:7px;padding:2px 4px;margin-left:4px;vertical-align:middle}
+.tabpane{display:none}
+.tabpane.on{display:block}
+.guide{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.card{background:var(--panel2);border:2px solid var(--edge);padding:10px;box-shadow: inset 2px 2px 0 #2f3670}
+.card-head{display:flex;gap:10px;align-items:center;margin-bottom:6px}
+.card-head img{width:48px;height:48px;image-rendering:pixelated;background:#0d2a12;border:2px solid var(--edge)}
+.card-head .nm{font-family:var(--px);font-size:10px}
+.card-head .role{font-family:var(--px);font-size:7px;margin-top:5px}
+.card p{margin:4px 0 8px;color:#cfd2f5;font-size:18px}
+.stat{display:grid;grid-template-columns:100px 1fr;align-items:center;font-size:17px;color:var(--muted)}
+.pips{display:flex;gap:2px}
+.pips i{width:14px;height:8px;background:#0a0c22;border:1px solid #2a3070}
+.pips i.f{background:var(--gold);border-color:#6b5300}
+.live{margin-top:8px;border-top:2px dashed #2f3670;padding-top:6px;font-size:17px;display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.live b{font-weight:normal;color:var(--gold);float:right}
+#journal{list-style:none;margin:0;padding:0;max-height:300px;overflow:auto;font-size:18px}
+#journal li{padding:4px 6px;border-left:4px solid #3a4180;margin-bottom:3px;background:rgba(255,255,255,.02)}
+#journal li .d{font-family:var(--px);font-size:7px;color:var(--dim);margin-right:6px}
+#journal li.note{border-color:var(--teal);background:rgba(79,224,200,.07)}
+#journal li.bad{border-color:var(--red)}
+#journal li.good{border-color:var(--green)}
+#journal li.gold{border-color:var(--gold);background:rgba(255,210,63,.07)}
+#journal li .tag{font-family:var(--px);font-size:7px;color:var(--teal);margin-right:6px}
+.obj{display:grid;grid-template-columns:30px 1fr auto;gap:8px;align-items:center;padding:6px 8px;background:var(--panel2);border:2px solid var(--edge);margin-bottom:6px}
+.obj .ck{font-family:var(--px);font-size:12px;color:#3a4180;text-align:center}
+.obj.done{border-color:var(--gold)}
+.obj.done .ck{color:var(--gold)}
+.obj .t{font-family:var(--px);font-size:9px;margin-bottom:4px}
+.obj .s{color:var(--muted);font-size:17px}
+.obj .p{font-family:var(--px);font-size:8px;color:var(--teal)}
+.eco{columns:2 340px;column-gap:20px}
+.eco section{break-inside:avoid;margin-bottom:14px}
+.eco h3{font-family:var(--px);font-size:9px;color:var(--teal);margin:0 0 6px;line-height:1.5}
+.eco p,.eco li{color:#cfd2f5;font-size:19px;margin:0 0 6px}
+.eco ul{margin:0;padding-left:20px}
+.formula{font-family:var(--px);font-size:8px;background:#000;padding:8px;border:2px solid var(--edge);color:var(--gold);line-height:1.8;margin:6px 0}
+
+/* ---------- overlays ---------- */
+.overlay{position:fixed;inset:0;background:rgba(5,6,16,.86);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;overflow:auto}
+.overlay.show{display:flex}
+.dialog{max-width:720px;width:100%;text-align:center}
+.big-title{font-family:var(--px);font-size:clamp(20px,5vw,40px);line-height:1.25;margin:10px 0 6px;color:#fff;
+  text-shadow:3px 3px 0 #e0457b, 6px 6px 0 #3b1d6e}
+.sub{font-family:var(--px);font-size:clamp(7px,1.6vw,10px);color:var(--teal);letter-spacing:2px;margin-bottom:16px}
+#parade{width:100%;height:auto;aspect-ratio:320/48;border:3px solid var(--edge);background:#2c4a2a;display:block;margin:0 auto 14px}
+.choices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.choice{padding:14px;text-align:left;cursor:pointer}
+.choice .btn{width:100%;font-size:10px;padding:12px}
+.choice p{font-size:18px;color:var(--muted);margin:8px 0 0}
+.how{text-align:left;font-size:19px;color:#cfd2f5}
+.how li{margin-bottom:4px}
+.blink{animation:blink 1.2s steps(2) infinite;font-family:var(--px);font-size:8px;color:var(--gold);margin-top:10px}
+.help-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;text-align:left;font-size:19px}
+.help-grid kbd{justify-self:start}
+
+@media (max-width:1050px){
+  .layout{grid-template-columns:1fr}
+  .side{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .canvas-wrap{max-width:none}
+}
+@media (max-width:560px){
+  #app{padding:8px 10px 20px}
+  .logo{font-size:12px}
+  .choices{grid-template-columns:1fr}
+  .eco{columns:1}
+  input[type=range]{width:120px}
+}
+@media (prefers-reduced-motion: reduce){
+  #pausedTag.show,.blink{animation:none}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <h1 class="logo">THE GAME OF LIFE<small>PREDATOR · PREY · BALANCE</small></h1>
+    <div class="chips" aria-live="polite">
+      <span class="chip" id="chipDate">YEAR <b>1</b> · DAY <b>1</b></span>
+      <span class="chip" id="chipSeason">☂ WET SEASON</span>
+      <span class="chip" id="chipPop">ANIMALS <b>0</b></span>
+    </div>
+    <div class="controls">
+      <button class="btn gold" id="btnPlay" title="Play / Pause (Space)">❚❚ PAUSE</button>
+      <button class="btn" id="btnStep" title="Advance one day (.)">STEP</button>
+      <button class="btn" id="btnSpeed" title="Change speed (+ / -)">SPEED 1×</button>
+      <button class="btn" id="btnView" title="Cycle view mode (V)">VIEW: NORMAL</button>
+      <button class="btn" id="btnSound" title="Toggle sound (M)">♪ ON</button>
+      <button class="btn" id="btnNew" title="New world (N)">NEW WORLD</button>
+      <button class="btn" id="btnHelp" title="Help (H)">?</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel stage">
+      <div class="canvas-wrap" id="wrap">
+        <canvas id="world" width="960" height="600" aria-label="Savanna world map. Click to inject a couple or inspect animals."></canvas>
+        <div id="pausedTag">PAUSED</div>
+        <div id="tooltip"></div>
+        <div id="tracker"></div>
+        <div id="toast" role="status"></div>
+      </div>
+      <div class="statusbar">
+        <span id="toolText">Tool: <b>Inspect</b></span>
+        <span id="viewLegend"></span>
+        <span>Seed <b id="seedText">—</b></span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <h2>INJECT A COUPLE <span style="color:var(--muted);font-size:7px">♂ + ♀</span></h2>
+        <div class="sp-grid" id="spGrid"></div>
+        <p class="hint">Pick an animal, then click the map to release a breeding <span class="male">♂</span>+<span class="female">♀</span> pair. <kbd>SHIFT</kbd>+click releases 3 pairs. Keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>0</kbd> to inspect.</p>
+      </div>
+      <div class="panel">
+        <h2>POPULATION <button class="btn" id="btnRange" style="font-size:7px;padding:5px 6px">2 YEARS</button></h2>
+        <div class="chart-box">
+          <div class="chart-label"><span>PREY</span><span id="preyMax">max 0</span></div>
+          <canvas id="chartPrey" width="240" height="72"></canvas>
+        </div>
+        <div class="chart-box">
+          <div class="chart-label"><span>PREDATORS</span><span id="predMax">max 0</span></div>
+          <canvas id="chartPred" width="240" height="72"></canvas>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div class="row" style="margin-top:10px"><label>Biodiversity (Shannon H)</label><b id="bioVal" class="px" style="font-size:9px;color:var(--teal)">0.00</b></div>
+        <div class="meter"><i id="bioBar" style="width:0%"></i></div>
+      </div>
+      <div class="panel">
+        <h2>ENVIRONMENT</h2>
+        <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100"></div>
+        <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked></div>
+        <div class="row"><label>Average grass</label><span class="bar" style="width:150px"><i id="grassBar" style="width:50%;background:#6cbf4a"></i></span></div>
+      </div>
+    </aside>
+  </main>
+
+  <section class="panel">
+    <div class="tabs-bar" role="tablist">
+      <button class="tab on" data-tab="guide" role="tab">SPECIES GUIDE</button>
+      <button class="tab" data-tab="journal" role="tab">FIELD JOURNAL<span class="badge" id="jBadge" style="display:none">0</span></button>
+      <button class="tab" data-tab="objectives" role="tab">OBJECTIVES <span id="objCount" style="color:var(--gold)">0/8</span></button>
+      <button class="tab" data-tab="eco" role="tab">ECOLOGY 101</button>
+    </div>
+    <div class="tabpane on" id="tab-guide"><div class="guide" id="guide"></div></div>
+    <div class="tabpane" id="tab-journal"><ul id="journal"></ul></div>
+    <div class="tabpane" id="tab-objectives"><div id="objectives"></div></div>
+    <div class="tabpane" id="tab-eco">
+      <div class="eco">
+        <section><h3>1 · FOOD CHAINS &amp; THE ENERGY PYRAMID</h3>
+          <p>Grass captures sunlight (a <b>producer</b>). Buffalo, gazelles and hares eat grass (<b>primary consumers</b>). Lions and cheetahs eat them (<b>secondary consumers</b>).</p>
+          <p>At every step most energy is used up just staying alive, so only a fraction moves up the chain. That is why the savanna always holds far more prey than predators — check the two charts.</p></section>
+        <section><h3>2 · PREDATOR–PREY CYCLES</h3>
+          <p>When prey are plentiful, predators eat well and raise more young. More predators eat more prey, so prey decline. Then predators go hungry and decline too, letting prey recover. The predator curve <b>lags behind</b> the prey curve.</p>
+          <div class="formula">dPrey/dt = αPrey − βPrey·Pred<br>dPred/dt = δPrey·Pred − γPred</div>
+          <p>These are the classic <b>Lotka–Volterra equations</b> (1920s). This game doesn't use them directly: the cycles emerge from individual animals.</p></section>
+        <section><h3>3 · r- AND K-STRATEGIES</h3>
+          <ul><li><b>r-strategists</b> (hares) mature early and have many young. They boom fast and crash fast.</li>
+          <li><b>K-strategists</b> (buffalo, lions) have few young and invest in each. They change slowly and recover slowly from losses.</li></ul></section>
+        <section><h3>4 · CARRYING CAPACITY</h3>
+          <p>An area's <b>carrying capacity</b> is the largest population its resources can support. Here, grass sets the limit for grazers. In the dry season grass grows slowly and the capacity drops. Try lowering the rainfall slider to simulate a drought.</p></section>
+        <section><h3>5 · COMPETITION &amp; NICHES</h3>
+          <p>Lions and cheetahs compete for the same prey. Real lions kill cheetahs and their cubs without eating them. Ecologists call this <b>intraguild predation</b>.</p>
+          <p>Cheetahs survive by <b>niche partitioning</b>: they are fast but weak, so they avoid buffalo and hunt hares and gazelles instead, and they steer clear of lions.</p></section>
+        <section><h3>6 · SEXUAL REPRODUCTION &amp; SMALL POPULATIONS</h3>
+          <p>Every birth here needs a male and a female who find each other. A very small or scattered population may fail to breed. This is the <b>Allee effect</b>. A single unlucky event can also wipe it out. That's why real reintroductions, like wolves to Yellowstone in 1995, release several animals.</p></section>
+        <section><h3>7 · TROPHIC CASCADES</h3>
+          <p>Remove the predators and grazers boom. Then the grass is eaten faster than it regrows, and the grazers starve. Effects that run down the food chain like this are called a <b>trophic cascade</b>.</p></section>
+        <section><h3>8 · MEASURING BIODIVERSITY</h3>
+          <p>The <b>Shannon index</b> scores both how many species there are and how evenly their numbers are spread:</p>
+          <div class="formula">H = − Σ pᵢ · ln(pᵢ)</div>
+          <p>where pᵢ is each species' share of all animals. With 5 species the maximum is ln 5 ≈ 1.61.</p></section>
+        <section><h3>🔬 EXPERIMENTS TO TRY</h3>
+          <ul><li>Start an <b>Empty Land</b>, add only hares, and watch them hit the carrying capacity.</li>
+          <li>Then add 2 cheetah couples. Do the predators settle into a cycle with the hares, or crash?</li>
+          <li>Set rainfall to 30% for two years. Which species suffers first, and why?</li>
+          <li>Add lions to a world full of cheetahs. What happens to the cheetahs?</li>
+          <li>Let a species die out, then reintroduce one couple. How often does it make it?</li></ul></section>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- Title screen -->
+<div class="overlay show" id="titleScreen" role="dialog" aria-modal="true" aria-labelledby="titleH">
+  <div class="dialog panel" style="padding:18px">
+    <div class="big-title" id="titleH">THE GAME<br>OF LIFE</div>
+    <div class="sub">AN ECOSYSTEM IN PIXELS</div>
+    <canvas id="parade" width="320" height="48"></canvas>
+    <div class="choices">
+      <div class="panel choice" data-preset="balanced">
+        <button class="btn gold" data-preset="balanced">▶ BALANCED SAVANNA</button>
+        <p>Start with all five species already living together. Watch the cycles and step in when something goes wrong.</p>
+      </div>
+      <div class="panel choice" data-preset="empty">
+        <button class="btn" data-preset="empty">◇ EMPTY LAND</button>
+        <p>Start from bare grassland and build the food web yourself, one couple at a time.</p>
+      </div>
+    </div>
+    <ul class="how">
+      <li><b>Each pixel-creature is one animal</b> that eats, flees, hunts and searches for a mate on its own.</li>
+      <li>Release <span class="male">♂</span>+<span class="female">♀</span> couples of any species, whenever you like.</li>
+      <li>Read the Species Guide, complete objectives, and learn what keeps an ecosystem in balance.</li>
+    </ul>
+    <div class="blink">PICK A WORLD TO BEGIN</div>
+  </div>
+</div>
+
+<!-- Help -->
+<div class="overlay" id="helpScreen" role="dialog" aria-modal="true" aria-labelledby="helpH">
+  <div class="dialog panel" style="padding:18px;max-width:560px">
+    <h2 id="helpH" style="justify-content:center">HOW TO PLAY</h2>
+    <div class="help-grid">
+      <kbd>1–5</kbd><span>Select an animal to inject (Buffalo, Gazelle, Hare, Lion, Cheetah)</span>
+      <kbd>CLICK</kbd><span>Release a ♂+♀ couple (with Shift: 3 couples)</span>
+      <kbd>0 / ESC</kbd><span>Inspect tool: hover to see an animal, click to track it</span>
+      <kbd>SPACE</kbd><span>Pause / resume</span>
+      <kbd>.</kbd><span>Step one day while paused</span>
+      <kbd>+ / −</kbd><span>Faster / slower</span>
+      <kbd>V</kbd><span>View: Normal → Sex (♂ blue, ♀ pink) → Energy (red = starving)</span>
+      <kbd>N</kbd><span>New world</span>
+      <kbd>M</kbd><span>Sound on / off</span>
+    </div>
+    <p class="hint" style="text-align:left">Prey are cool colours (blue buffalo, teal gazelles, white hares). Predators are warm colours (gold lions, red cheetahs). Babies are drawn smaller. Grass changes from green to straw to bare earth as it is eaten and as the seasons change.</p>
+    <button class="btn gold" id="btnCloseHelp" style="margin-top:10px">GOT IT</button>
+  </div>
+</div>
+
+<!-- ===================== SIMULATION CORE (no DOM) ===================== -->
+<script id="sim-core">
+const GOL = (() => {
+  'use strict';
+  const W = 160, H = 100, N = W * H, YEAR = 360;
+  const CH = 10, CW = W / CH, CHH = H / CH, CN = CW * CHH;
+  const T_GRASS = 0, T_WATER = 1, T_TREE = 2, T_ROCK = 3;
+  const PREY_MASK = 0b00111, PRED_MASK = 0b11000;
+  const D8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const HIST_CAP = 2400, SAMPLE_EVERY = 4, MAX_ANIMALS = 6000;
+  const CAUSES = ['eaten', 'starve', 'age', 'fight'];
+
+  // Index 0..2 = Prey A/B/C, 3..4 = Predator A/B
+  const SPECIES = [
+    { key:'buffalo', name:'Buffalo', plural:'Buffalo', role:'Prey A', isPrey:true,
+      color:'#4f74e8', speed:0.7, sight:4, maxE:160, metab:0.3, moveCost:0.1, bite:0.5, gain:12,
+      mature:150, gestation:80, litter:[1,1], cooldown:110, life:[1100,1500],
+      resistance:0.65, food:90, counter:0.25, counterDmg:28, flees:false, birthCost:0.2, mateAt:0.5, crowdR:5, crowdMax:3 },
+    { key:'gazelle', name:'Gazelle', plural:'Gazelles', role:'Prey B', isPrey:true,
+      color:'#36c9b4', speed:1.25, sight:7, maxE:90, metab:0.27, moveCost:0.07, bite:0.3, gain:9,
+      mature:90, gestation:50, litter:[1,2], cooldown:55, life:[900,1200],
+      resistance:0.35, food:40, counter:0, counterDmg:0, flees:true, birthCost:0.16, mateAt:0.5, crowdR:5, crowdMax:4 },
+    { key:'hare', name:'Hare', plural:'Hares', role:'Prey C', isPrey:true,
+      color:'#e9e4d4', speed:1.0, sight:4, maxE:45, metab:0.2, moveCost:0.05, bite:0.2, gain:8,
+      mature:55, gestation:28, litter:[1,3], cooldown:40, life:[380,520],
+      resistance:0.1, food:16, counter:0, counterDmg:0, flees:true, hides:true, birthCost:0.1, mateAt:0.45, crowdR:4, crowdMax:4 },
+    { key:'lion', name:'Lion', plural:'Lions', role:'Predator A', isPrey:false,
+      color:'#ffc61a', speed:1.0, sight:9, maxE:220, metab:0.6, moveCost:0.12,
+      mature:260, gestation:110, litter:[1,3], cooldown:240, life:[1700,2200],
+      strength:10, skill:0.75, coop:true, hungerAt:0.72, aggression:0.03, birthCost:0.12, mateAt:0.6, crowdR:14, crowdMax:1, recover:5, chase:14 },
+    { key:'cheetah', name:'Cheetah', plural:'Cheetahs', role:'Predator B', isPrey:false,
+      color:'#ff5468', speed:2.0, sight:9, maxE:130, metab:0.45, moveCost:0.07,
+      mature:170, gestation:85, litter:[1,3], cooldown:180, life:[1300,1700],
+      strength:6, skill:0.62, hungerAt:0.72, aggression:0.04, birthCost:0.1, mateAt:0.6, crowdR:14, crowdMax:3, recover:8, chase:10 },
+  ];
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function makeNoise(rand) {
+    const perm = new Uint8Array(512), vals = new Float32Array(256), p = [];
+    for (let i = 0; i < 256; i++) { p.push(i); vals[i] = rand(); }
+    for (let i = 255; i > 0; i--) { const j = (rand() * (i + 1)) | 0; const t = p[i]; p[i] = p[j]; p[j] = t; }
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    const lat = (x, y) => vals[perm[(x & 255) + perm[y & 255]]];
+    const sm = t => t * t * (3 - 2 * t);
+    const n2 = (x, y) => {
+      const ix = Math.floor(x), iy = Math.floor(y), u = sm(x - ix), v = sm(y - iy);
+      const a = lat(ix, iy), b = lat(ix + 1, iy), c = lat(ix, iy + 1), d = lat(ix + 1, iy + 1);
+      return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+    };
+    return (x, y, oct) => {
+      let s = 0, amp = 1, f = 1, tot = 0;
+      for (let o = 0; o < oct; o++) { s += n2(x * f, y * f) * amp; tot += amp; amp *= 0.5; f *= 2; }
+      return s / tot;
+    };
+  }
+
+  // ---------- world ----------
+  function createWorld(seed, preset) {
+    const w = {
+      seed, rand: mulberry32(seed), tick: 0,
+      terrain: new Uint8Array(N), fert: new Float32Array(N), cap: new Float32Array(N), grass: new Float32Array(N),
+      occ: new Array(N).fill(null), animals: [], nextId: 1, landCells: 0,
+      rain: 1, seasons: true, avgGrass: 0,
+      counts: [0,0,0,0,0], males: [0,0,0,0,0], juveniles: [0,0,0,0,0], prevCounts: [0,0,0,0,0],
+      births: [0,0,0,0,0], kills: [0,0,0,0,0], injected: [0,0,0,0,0],
+      deaths: SPECIES.map(() => ({ eaten:0, starve:0, age:0, fight:0 })),
+      extinctAt: [-1,-1,-1,-1,-1], fights: 0,
+      chunks: new Int32Array(5 * CN),
+      hist: { len: 0, data: SPECIES.map(() => new Float32Array(HIST_CAP)), grass: new Float32Array(HIST_CAP) },
+      events: [], seasonName: '',
+    };
+    genTerrain(w);
+    if (preset === 'balanced') populate(w);
+    recount(w);
+    w.prevCounts = w.counts.slice();
+    w.seasonName = seasonInfo(w).name;
+    return w;
+  }
+
+  function genTerrain(w) {
+    const r = w.rand, fbm = makeNoise(r);
+    const ox = r() * 1000, oy = r() * 1000;
+    const elev = new Float32Array(N), moist = new Float32Array(N);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      elev[i] = fbm(x / 34 + ox, y / 34 + oy, 4);
+      moist[i] = fbm(x / 22 + ox + 300, y / 22 + oy + 300, 3);
+    }
+    const sorted = Float32Array.from(elev).sort();
+    const wT = sorted[Math.floor(N * 0.075)], rT = sorted[Math.floor(N * 0.975)];
+    for (let i = 0; i < N; i++) {
+      w.terrain[i] = elev[i] < wT ? T_WATER : (elev[i] > rT && moist[i] < 0.55 ? T_ROCK : T_GRASS);
+    }
+    // distance to water (BFS, 4-neighbour)
+    const dist = new Int16Array(N).fill(99), q = new Int32Array(N);
+    let qh = 0, qt = 0;
+    for (let i = 0; i < N; i++) if (w.terrain[i] === T_WATER) { dist[i] = 0; q[qt++] = i; }
+    while (qh < qt) {
+      const i = q[qh++], d = dist[i];
+      if (d >= 12) continue;
+      const x = i % W, y = (i / W) | 0;
+      if (x > 0 && dist[i - 1] > d + 1) { dist[i - 1] = d + 1; q[qt++] = i - 1; }
+      if (x < W - 1 && dist[i + 1] > d + 1) { dist[i + 1] = d + 1; q[qt++] = i + 1; }
+      if (y > 0 && dist[i - W] > d + 1) { dist[i - W] = d + 1; q[qt++] = i - W; }
+      if (y < H - 1 && dist[i + W] > d + 1) { dist[i + W] = d + 1; q[qt++] = i + W; }
+    }
+    let land = 0;
+    for (let i = 0; i < N; i++) {
+      if (w.terrain[i] === T_WATER) continue;
+      const f = Math.max(0.15, Math.min(1, 0.25 + 0.55 * moist[i] + Math.max(0, 12 - dist[i]) / 12 * 0.35));
+      w.fert[i] = f; w.cap[i] = 0.4 + 0.6 * f;
+      if (w.terrain[i] === T_GRASS && dist[i] > 1 && r() < 0.008 + Math.max(0, moist[i] - 0.5) * 0.06) w.terrain[i] = T_TREE;
+      if (w.terrain[i] === T_GRASS) { w.grass[i] = w.cap[i] * (0.6 + 0.35 * r()); land++; }
+    }
+    w.landCells = land;
+    w.cover = new Uint8Array(N);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const t = w.terrain[y * W + x];
+      if (t !== T_TREE && t !== T_ROCK) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H) w.cover[ny * W + nx] = 1;
+      }
+    }
+  }
+
+  function isFree(w, x, y) {
+    if (x < 0 || y < 0 || x >= W || y >= H) return false;
+    const i = y * W + x;
+    return w.terrain[i] === T_GRASS && w.occ[i] === null;
+  }
+
+  function findFreeNear(w, x, y, R) {
+    x = Math.max(0, Math.min(W - 1, x | 0)); y = Math.max(0, Math.min(H - 1, y | 0));
+    if (isFree(w, x, y)) return { x, y };
+    const cand = [];
+    for (let d = 1; d <= R; d++) {
+      cand.length = 0;
+      for (let dx = -d; dx <= d; dx++) {
+        if (isFree(w, x + dx, y - d)) cand.push(x + dx, y - d);
+        if (isFree(w, x + dx, y + d)) cand.push(x + dx, y + d);
+      }
+      for (let dy = -d + 1; dy <= d - 1; dy++) {
+        if (isFree(w, x - d, y + dy)) cand.push(x - d, y + dy);
+        if (isFree(w, x + d, y + dy)) cand.push(x + d, y + dy);
+      }
+      if (cand.length) { const k = ((w.rand() * cand.length / 2) | 0) * 2; return { x: cand[k], y: cand[k + 1] }; }
+    }
+    return null;
+  }
+
+  function newHeading(a, r) { const ang = r() * Math.PI * 2; a.hx = Math.cos(ang); a.hy = Math.sin(ang); }
+
+  function makeAnimal(w, sp, male, x, y, age, energyFrac) {
+    const S = SPECIES[sp], r = w.rand;
+    const a = {
+      id: w.nextId++, sp, male, x, y, age, energy: S.maxE * energyFrac, alive: true,
+      preg: 0, cd: 0, think: (r() * 3) | 0, mode: S.isPrey ? 'graze' : 'rest', tgt: null,
+      face: r() < 0.5 ? 1 : -1, acc: r(), atk: 0, alert: 0, hx: 1, hy: 0,
+      life: S.life[0] + r() * (S.life[1] - S.life[0]), mom: null, injected: false,
+      cause: null, by: -1, gen: 0, chase: 0,
+    };
+    newHeading(a, r);
+    w.occ[y * W + x] = a;
+    w.animals.push(a);
+    return a;
+  }
+
+  function randomLand(w) {
+    for (let k = 0; k < 2000; k++) {
+      const x = (w.rand() * W) | 0, y = (w.rand() * H) | 0;
+      if (isFree(w, x, y)) return { x, y };
+    }
+    return null;
+  }
+
+  function populate(w) {
+    const plan = [[0, 36, 4], [1, 80, 6], [2, 200, 10], [3, 12, 3], [4, 12, 3]];
+    const r = w.rand;
+    for (const [sp, n, groups] of plan) {
+      const S = SPECIES[sp], per = Math.ceil(n / groups);
+      let placed = 0;
+      for (let g = 0; g < groups && placed < n; g++) {
+        const c0 = randomLand(w); if (!c0) continue;
+        for (let k = 0; k < per && placed < n; k++) {
+          const c = findFreeNear(w, c0.x + ((r() * 9) | 0) - 4, c0.y + ((r() * 9) | 0) - 4, 6);
+          if (!c) break;
+          const age = Math.min(S.life[0] * 0.6, S.mature * (0.8 + r()));
+          makeAnimal(w, sp, k % 2 === 0, c.x, c.y, Math.floor(age), 0.65 + r() * 0.25);
+          placed++;
+        }
+      }
+    }
+  }
+
+  // ---------- seasons ----------
+  function seasonInfo(w, tick) {
+    const t = tick === undefined ? w.tick : tick;
+    const ph = (t % YEAR) / YEAR;
+    const c = Math.cos(2 * Math.PI * ph);
+    if (!w.seasons) return { factor: 0.62, dryness: 0.35, name: 'Mild', phase: ph };
+    const factor = 0.575 + 0.425 * c;           // 1.0 (peak wet) .. 0.15 (peak dry)
+    const dryness = (1 - c) / 2;
+    let name;
+    if (c > 0.3) name = 'Wet season';
+    else if (c < -0.3) name = 'Dry season';
+    else name = ph < 0.5 ? 'Drying out' : 'Rains returning';
+    return { factor, dryness, name, phase: ph };
+  }
+
+  // ---------- spatial queries ----------
+  function anyInBox(w, x0, y0, x1, y1, mask) {
+    x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W - 1, x1); y1 = Math.min(H - 1, y1);
+    const cx0 = (x0 / CH) | 0, cx1 = (x1 / CH) | 0, cy0 = (y0 / CH) | 0, cy1 = (y1 / CH) | 0;
+    const ch = w.chunks;
+    for (let sp = 0; sp < 5; sp++) {
+      if (!((mask >> sp) & 1)) continue;
+      const base = sp * CN;
+      for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) if (ch[base + cy * CW + cx]) return true;
+    }
+    return false;
+  }
+
+  function findNearest(w, a, R, mask, pred) {
+    if (!anyInBox(w, a.x - R, a.y - R, a.x + R, a.y + R, mask)) return null;
+    const occ = w.occ;
+    const chk = (x, y) => {
+      const o = occ[y * W + x];
+      return (o && o !== a && ((mask >> o.sp) & 1) && pred(o)) ? o : null;
+    };
+    for (let d = 1; d <= R; d++) {
+      const yA = a.y - d, yB = a.y + d, xL = a.x - d, xR = a.x + d;
+      for (let x = Math.max(0, xL); x <= Math.min(W - 1, xR); x++) {
+        let o;
+        if (yA >= 0 && (o = chk(x, yA))) return o;
+        if (yB < H && (o = chk(x, yB))) return o;
+      }
+      for (let y = Math.max(0, yA + 1); y <= Math.min(H - 1, yB - 1); y++) {
+        let o;
+        if (xL >= 0 && (o = chk(xL, y))) return o;
+        if (xR < W && (o = chk(xR, y))) return o;
+      }
+    }
+    return null;
+  }
+
+  function adjacentOf(w, a, sp) {
+    for (let k = 0; k < 8; k++) {
+      const x = a.x + D8[k][0], y = a.y + D8[k][1];
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const o = w.occ[y * W + x];
+      if (o && o.sp === sp) return o;
+    }
+    return null;
+  }
+  function countAdj(w, a, sp) {
+    let n = 0;
+    for (let k = 0; k < 8; k++) {
+      const x = a.x + D8[k][0], y = a.y + D8[k][1];
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const o = w.occ[y * W + x];
+      if (o && o !== a && o.sp === sp) n++;
+    }
+    return n;
+  }
+  const cheb = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+
+  // ---------- combat helpers ----------
+  function effStrength(a) {
+    const S = SPECIES[a.sp];
+    const juv = a.age < S.mature;
+    return (S.strength || 1) * (juv ? 0.45 : 1) * (0.6 + 0.4 * Math.min(1, a.energy / S.maxE));
+  }
+  function catchProb(w, a, o) {
+    const S = SPECIES[a.sp], P = SPECIES[o.sp];
+    let res = P.resistance * Math.sqrt(10 / effStrength(a));
+    if (o.age < P.mature) res *= 0.55;
+    res *= 0.7 + 0.3 * Math.min(1, o.energy / P.maxE);
+    if (o.age > o.life * 0.85) res *= 0.7;
+    if (P.hides && w.cover[o.y * W + o.x]) res = 1 - (1 - res) * 0.5;
+    res = Math.min(0.97, res);
+    // Cooperative hunting: every other hunter of the same kind next to the prey helps.
+    const helpers = S.coop ? Math.min(3, countAdj(w, o, a.sp) - (cheb(a, o) <= 1 ? 1 : 0)) : 0;
+    return Math.min(0.95, S.skill * (a.age < S.mature ? 0.6 : 1) * (1 + 0.3 * Math.max(0, helpers)) * (1 - res));
+  }
+
+  function emit(w, e) { if (w.events.length < 4000) w.events.push(e); }
+
+  function die(w, a, cause, by) {
+    if (!a.alive) return;
+    a.alive = false; a.cause = cause; a.by = by === undefined ? -1 : by; a.deathTick = w.tick;
+    const i = a.y * W + a.x;
+    if (w.occ[i] === a) w.occ[i] = null;
+    w.deaths[a.sp][cause]++;
+    if (cause === 'starve' || cause === 'age') emit(w, { t: 'death', sp: a.sp, x: a.x, y: a.y, cause });
+  }
+
+  function feed(w, a, food) {
+    const S = SPECIES[a.sp];
+    let pool = food;
+    const kin = [];
+    for (let y = Math.max(0, a.y - 3); y <= Math.min(H - 1, a.y + 3); y++)
+      for (let x = Math.max(0, a.x - 3); x <= Math.min(W - 1, a.x + 3); x++) {
+        const o = w.occ[y * W + x];
+        if (o && o !== a && o.sp === a.sp) kin.push(o);
+      }
+    // dependent young eat first
+    for (const j of kin) {
+      if (j.age >= S.mature || pool <= 0) continue;
+      const g = Math.min(S.maxE - j.energy, food * 0.3, pool);
+      if (g > 0) { j.energy += g; pool -= g; }
+    }
+    const take = Math.min(pool, S.maxE - a.energy);
+    a.energy += take; pool -= take;
+    for (const k of kin) {
+      if (pool <= 1) break;
+      const g = Math.min(S.maxE - k.energy, pool * 0.5);
+      if (g > 0) { k.energy += g; pool -= g; }
+    }
+  }
+
+  // Alarm call: nearby animals of the same kind notice the attack and bolt.
+  function alarm(w, o, R) {
+    for (let y = Math.max(0, o.y - R); y <= Math.min(H - 1, o.y + R); y++)
+      for (let x = Math.max(0, o.x - R); x <= Math.min(W - 1, o.x + R); x++) {
+        const k = w.occ[y * W + x];
+        if (k && k !== o && k.sp === o.sp) { k.alert = 8; k.think = 0; }
+      }
+  }
+
+  function attack(w, a, o) {
+    if (a.atk > 0) return;
+    const P = SPECIES[o.sp];
+    a.atk = SPECIES[a.sp].recover;
+    if (w.rand() < catchProb(w, a, o)) {
+      const food = P.food * (o.age < P.mature ? 0.5 : 1);
+      const ox = o.x, oy = o.y;
+      die(w, o, 'eaten', a.sp);
+      feed(w, a, food);
+      w.kills[a.sp]++;
+      emit(w, { t: 'kill', sp: a.sp, prey: o.sp, x: ox, y: oy });
+      a.tgt = null; a.think = 0;
+    } else {
+      a.energy -= 2;
+      o.alert = 10; o.think = 0;
+      if (P.flees) alarm(w, o, 4);
+      if (P.counter > 0) {
+        const c = P.counter + 0.08 * countAdj(w, o, o.sp);
+        if (w.rand() < c) {
+          a.energy -= P.counterDmg; a.atk = 10;
+          emit(w, { t: 'gore', sp: a.sp, x: a.x, y: a.y });
+          if (a.energy <= 0) die(w, a, 'fight', o.sp);
+          else if (w.rand() < 0.5) { a.mode = 'rest'; a.tgt = null; a.think = 6; }
+        }
+      }
+    }
+  }
+
+  function fight(w, a, b) {
+    if (!a.alive || !b.alive || a.sp === b.sp) return;
+    const sa = effStrength(a), sb = effStrength(b);
+    const aWins = w.rand() < sa / (sa + sb);
+    const win = aWins ? a : b, lose = aWins ? b : a;
+    win.energy -= 10; lose.energy -= 25;
+    a.atk = 8; b.atk = 8;
+    const killed = w.rand() < 0.55 || lose.energy <= 0;
+    const fx = lose.x, fy = lose.y;
+    if (killed) die(w, lose, 'fight', win.sp);
+    else { lose.mode = 'flee'; lose.tgt = win; lose.think = 8; }
+    if (win.alive && win.energy <= 0) die(w, win, 'fight', lose.sp);
+    if (win.alive) { win.tgt = null; win.mode = 'rest'; win.think = 0; }
+    w.fights++;
+    emit(w, { t: 'fight', x: fx, y: fy, win: win.sp, lose: lose.sp, killed });
+  }
+
+  function tryMate(w, a, b) {
+    const S = SPECIES[a.sp];
+    if (!b.alive || b.sp !== a.sp || b.male === a.male) return;
+    const fem = a.male ? b : a, mal = a.male ? a : b;
+    if (fem.preg > 0 || fem.cd > 0 || mal.cd > 0 || fem.age < S.mature || mal.age < S.mature) return;
+    if (crowd(w, fem, S.crowdR) > S.crowdMax) { fem.cd = 20; mal.cd = 12; a.tgt = b.tgt = null; return; }
+    fem.preg = S.gestation; mal.cd = 12;
+    a.mode = b.mode = S.isPrey ? 'graze' : 'rest'; a.tgt = b.tgt = null;
+    emit(w, { t: 'mate', sp: a.sp, x: fem.x, y: fem.y });
+  }
+
+  function giveBirth(w, mom) {
+    const S = SPECIES[mom.sp], r = w.rand;
+    const ef = Math.min(1, mom.energy / S.maxE);
+    const n = S.litter[0] + Math.floor(r() * ef * (S.litter[1] - S.litter[0] + 1));
+    let born = 0;
+    for (let k = 0; k < n; k++) {
+      if (w.animals.length >= MAX_ANIMALS) break;
+      if (mom.energy < S.maxE * S.birthCost * 1.5) break;
+      const c = findFreeNear(w, mom.x, mom.y, 2);
+      if (!c) break;
+      const kid = makeAnimal(w, mom.sp, r() < 0.5, c.x, c.y, 0, 0.5);
+      kid.mom = mom; kid.gen = mom.gen + 1; kid.face = mom.face;
+      mom.energy -= S.maxE * S.birthCost;
+      born++;
+    }
+    mom.cd = S.cooldown;
+    if (born) { w.births[mom.sp] += born; emit(w, { t: 'birth', sp: mom.sp, x: mom.x, y: mom.y, n: born }); }
+  }
+
+  // ---------- decision making ----------
+  function readyToMate(a, S) {
+    if (a.age < S.mature || a.cd > 0) return false;
+    if (a.male) return a.energy > S.maxE * 0.4;
+    return a.preg === 0 && a.energy > S.maxE * S.mateAt;
+  }
+
+  function seekMate(w, a, S, R) {
+    return findNearest(w, a, R, 1 << a.sp, o => o.male !== a.male && readyToMate(o, S));
+  }
+
+  function thinkPrey(w, a, S) {
+    a.tgt = null;
+    if (S.flees || a.alert > 0) {
+      const R = S.sight + (a.alert > 0 ? 2 : 0);
+      const t = findNearest(w, a, R, PRED_MASK, o => o.age >= SPECIES[o.sp].mature * 0.6);
+      if (t) { a.mode = 'flee'; a.tgt = t; return; }
+    }
+    if (readyToMate(a, S) && (a.male || crowd(w, a, S.crowdR) <= S.crowdMax)) {
+      const m = seekMate(w, a, S, S.sight * 2);
+      if (m) { a.mode = 'mate'; a.tgt = m; return; }
+    }
+    a.mode = 'graze';
+  }
+
+  // Density-dependent breeding: females won't breed where their own kind is already crowded
+  // (intraspecific competition / territoriality). This is what lets competing species coexist.
+  function crowd(w, a, R) {
+    let n = 0;
+    for (let y = Math.max(0, a.y - R); y <= Math.min(H - 1, a.y + R); y++)
+      for (let x = Math.max(0, a.x - R); x <= Math.min(W - 1, a.x + R); x++) {
+        const o = w.occ[y * W + x];
+        if (o && o !== a && o.sp === a.sp) n++;
+      }
+    return n;
+  }
+
+  // Predators pick the prey with the best expected meal per distance, but they "switch"
+  // toward whatever prey type is common around them (a search image). Rare prey get
+  // overlooked, which gives them a refuge and stabilises the food web.
+  const _cand = [], _cnt = [0, 0, 0];
+  function bestPrey(w, a, S) {
+    const R = S.sight;
+    const x0 = Math.max(0, a.x - R), x1 = Math.min(W - 1, a.x + R), y0 = Math.max(0, a.y - R), y1 = Math.min(H - 1, a.y + R);
+    if (!anyInBox(w, x0, y0, x1, y1, PREY_MASK)) return null;
+    _cand.length = 0; _cnt[0] = _cnt[1] = _cnt[2] = 0;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const o = w.occ[y * W + x];
+      if (!o || o.sp > 2) continue;
+      const P = SPECIES[o.sp];
+      if (P.hides && w.cover[y * W + x] && Math.max(Math.abs(x - a.x), Math.abs(y - a.y)) > 3) continue;
+      _cnt[o.sp]++;
+      const p = catchProb(w, a, o);
+      const ev = p * P.food * (o.age < P.mature ? 0.5 : 1) - (1 - p) * (2 + P.counter * P.counterDmg);
+      if (ev <= 0) continue;
+      const dx = x - a.x, dy = y - a.y;
+      _cand.push(o, ev / (Math.sqrt(dx * dx + dy * dy) + 3));
+    }
+    const tot = _cnt[0] + _cnt[1] + _cnt[2];
+    let best = null, bs = 0;
+    for (let k = 0; k < _cand.length; k += 2) {
+      const o = _cand[k], share = _cnt[o.sp] / tot;
+      const sc = _cand[k + 1] * share * share;
+      if (sc > bs) { bs = sc; best = o; }
+    }
+    _cand.length = 0;
+    return best;
+  }
+
+  function thinkPred(w, a, S) {
+    a.tgt = null;
+    const juv = a.age < S.mature;
+    const ef = a.energy / S.maxE;
+    const rival = a.sp === 3 ? 4 : 3;
+    if (a.sp === 4) { // cheetahs avoid grown lions
+      const l = findNearest(w, a, 4, 1 << 3, o => o.age >= SPECIES[3].mature * 0.6);
+      if (l) { a.mode = 'flee'; a.tgt = l; return; }
+    }
+    if (juv && a.age < S.mature * 0.6 && a.mom && a.mom.alive) { a.mode = 'follow'; a.tgt = a.mom; return; }
+    if (!juv && w.rand() < S.aggression) {
+      // Lions attack cheetahs; cheetahs pick on unguarded lion cubs.
+      const t = findNearest(w, a, 5, 1 << rival, o => a.sp === 3 || o.age < SPECIES[3].mature);
+      if (t) { a.mode = 'attack'; a.tgt = t; return; }
+    }
+    if (ef < S.hungerAt && a.atk === 0) {
+      const p = bestPrey(w, a, S);
+      if (p) { a.mode = 'hunt'; a.tgt = p; return; }
+      a.mode = 'search'; return;
+    }
+    if (readyToMate(a, S) && (a.male || crowd(w, a, S.crowdR) <= S.crowdMax)) {
+      const m = seekMate(w, a, S, S.sight * 3);
+      if (m) { a.mode = 'mate'; a.tgt = m; return; }
+      a.mode = 'wander'; return;
+    }
+    a.mode = 'rest';
+  }
+
+  function moveStep(w, a) {
+    const mode = a.mode, t = a.tgt, r = w.rand, g = w.grass, occ = w.occ, ter = w.terrain;
+    const ci = a.y * W + a.x;
+    if (t) {
+      const d = cheb(a, t);
+      if ((mode === 'hunt' || mode === 'attack' || mode === 'mate') && d <= 1) return false;
+      if (mode === 'follow' && d <= 2 && r() < 0.7) return false;
+    }
+    if (mode === 'rest' && r() > 0.12) return false;
+    if (mode === 'graze' && g[ci] > 0.25 && r() < 0.85) return false;
+    let best = -1e9, bx = -1, by = -1;
+    for (let k = 0; k < 8; k++) {
+      const dx = D8[k][0], dy = D8[k][1], nx = a.x + dx, ny = a.y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (ter[ni] !== T_GRASS || occ[ni] !== null) continue;
+      let s = r() * 0.3;
+      if (t) {
+        const ex = nx - t.x, ey = ny - t.y, dist = Math.sqrt(ex * ex + ey * ey);
+        s += mode === 'flee' ? dist * 1.5 + g[ni] * 0.3 + (w.cover[ni] && SPECIES[a.sp].hides ? 2 : 0) : -dist;
+      } else if (mode === 'graze') {
+        s += g[ni] * 2 + (dx * a.hx + dy * a.hy) * 0.15;
+      } else {
+        s += (dx * a.hx + dy * a.hy) * 0.6;
+      }
+      if (s > best) { best = s; bx = nx; by = ny; }
+    }
+    if (bx < 0) { newHeading(a, r); return false; }
+    if (!t && r() < 0.06) newHeading(a, r);
+    occ[ci] = null; occ[by * W + bx] = a;
+    if (bx !== a.x) a.face = bx > a.x ? 1 : -1;
+    a.x = bx; a.y = by;
+    return true;
+  }
+
+  function update(w, a) {
+    const S = SPECIES[a.sp], r = w.rand;
+    a.age++;
+    if (a.age >= a.life) { die(w, a, 'age'); return; }
+    const juv = a.age < S.mature;
+    a.energy -= S.metab * (juv ? 0.75 : 1) * (a.preg > 0 ? 1.15 : 1);
+    if (a.energy <= 0) { die(w, a, 'starve'); return; }
+    if (a.cd > 0) a.cd--;
+    if (a.atk > 0) a.atk--;
+    if (a.alert > 0) a.alert--;
+    if (a.preg > 0 && --a.preg === 0) giveBirth(w, a);
+    if (a.tgt && !a.tgt.alive) { a.tgt = null; a.think = 0; }
+    if (--a.think <= 0) { (S.isPrey ? thinkPrey : thinkPred)(w, a, S); a.think = 2 + ((r() * 3) | 0); }
+    a.acc += S.speed;
+    while (a.acc >= 1) {
+      a.acc -= 1;
+      if (!moveStep(w, a)) break;
+      a.energy -= S.moveCost;
+      if (a.tgt && a.mode === 'hunt' && cheb(a, a.tgt) <= 1) break;
+    }
+    // Chases are tiring: a predator that can't close in soon gives up and rests.
+    if (!S.isPrey) {
+      if (a.mode === 'hunt' && a.tgt && cheb(a, a.tgt) > 1) {
+        if (++a.chase > S.chase) { a.chase = 0; a.atk = S.recover * 2; a.mode = 'rest'; a.tgt = null; a.think = 6; }
+      } else a.chase = 0;
+    }
+    if (S.isPrey) {
+      const i = a.y * W + a.x;
+      if (a.energy < S.maxE) {
+        const v = w.grass[i];
+        // grazing functional response: short grass yields much less per bite
+        const amt = Math.min(v - 0.04, S.bite * (juv ? 0.6 : 1) * v / (v + 0.4));
+        if (amt > 0) { w.grass[i] -= amt; a.energy = Math.min(S.maxE, a.energy + amt * S.gain); }
+      }
+      if (a.mode === 'mate' && a.tgt && cheb(a, a.tgt) <= 1) tryMate(w, a, a.tgt);
+    } else {
+      const t = a.tgt;
+      if (t && t.alive && cheb(a, t) <= 1) {
+        if (a.mode === 'hunt') attack(w, a, t);
+        else if (a.mode === 'attack') fight(w, a, t);
+        else if (a.mode === 'mate') tryMate(w, a, t);
+      }
+      // chance encounter: a grown lion next to a cheetah may start a fight
+      if (a.alive && a.sp === 3 && !juv && a.atk === 0 && r() < 0.03) {
+        const c = adjacentOf(w, a, 4);
+        if (c) fight(w, a, c);
+      }
+    }
+  }
+
+  function recount(w) {
+    const c = w.counts, m = w.males, j = w.juveniles;
+    for (let s = 0; s < 5; s++) { c[s] = 0; m[s] = 0; j[s] = 0; }
+    for (const a of w.animals) {
+      if (!a.alive) continue;
+      c[a.sp]++;
+      if (a.male) m[a.sp]++;
+      if (a.age < SPECIES[a.sp].mature) j[a.sp]++;
+    }
+  }
+
+  function step(w) {
+    w.tick++;
+    const si = seasonInfo(w);
+    // grass regrowth (slow when nearly bare: overgrazing hurts)
+    const base = 0.035 * si.factor * w.rain;
+    const g = w.grass, f = w.fert, cap = w.cap, ter = w.terrain;
+    let gsum = 0;
+    for (let i = 0; i < N; i++) {
+      if (ter[i] !== T_GRASS) continue;
+      const c = cap[i], v = g[i];
+      if (v < c) { const nv = v + base * f[i] * (0.3 + v) * (1 - v / c); g[i] = nv > c ? c : nv; }
+      else if (v > c) g[i] = c;
+      gsum += g[i];
+    }
+    w.avgGrass = gsum / Math.max(1, w.landCells);
+
+    const A = w.animals, ch = w.chunks;
+    ch.fill(0);
+    for (const a of A) ch[a.sp * CN + ((a.y / CH) | 0) * CW + ((a.x / CH) | 0)]++;
+    for (let i = A.length - 1; i > 0; i--) { const j = (w.rand() * (i + 1)) | 0; const t = A[i]; A[i] = A[j]; A[j] = t; }
+    const n = A.length;
+    for (let k = 0; k < n; k++) { const a = A[k]; if (a.alive) update(w, a); }
+    let wi = 0;
+    for (let k = 0; k < A.length; k++) if (A[k].alive) A[wi++] = A[k];
+    A.length = wi;
+
+    recount(w);
+    for (let s = 0; s < 5; s++) {
+      if (w.prevCounts[s] > 0 && w.counts[s] === 0) { w.extinctAt[s] = w.tick; emit(w, { t: 'extinct', sp: s }); }
+      w.prevCounts[s] = w.counts[s];
+    }
+    if (si.name !== w.seasonName) { w.seasonName = si.name; emit(w, { t: 'season', name: si.name }); }
+    if (w.tick % YEAR === 0) emit(w, { t: 'year', year: w.tick / YEAR + 1 });
+    if (w.tick % SAMPLE_EVERY === 0) {
+      const h = w.hist, k = h.len % HIST_CAP;
+      for (let s = 0; s < 5; s++) h.data[s][k] = w.counts[s];
+      h.grass[k] = w.avgGrass;
+      h.len++;
+    }
+  }
+
+  function inject(w, sp, x, y) {
+    const S = SPECIES[sp], r = w.rand;
+    if (w.animals.length >= MAX_ANIMALS - 1) return null;
+    const c1 = findFreeNear(w, x, y, 5);
+    if (!c1) return null;
+    const ageOf = () => Math.floor(Math.min(S.life[0] * 0.5, S.mature * (1 + r() * 0.3)));
+    const m = makeAnimal(w, sp, true, c1.x, c1.y, ageOf(), 0.9);
+    const c2 = findFreeNear(w, c1.x, c1.y, 3);
+    if (!c2) { w.occ[c1.y * W + c1.x] = null; w.animals.pop(); return null; }
+    const f = makeAnimal(w, sp, false, c2.x, c2.y, ageOf(), 0.9);
+    m.injected = f.injected = true;
+    m.think = f.think = 0;
+    w.injected[sp]++;
+    w.counts[sp] += 2; w.males[sp] += 1;
+    w.chunks[sp * CN + ((c1.y / CH) | 0) * CW + ((c1.x / CH) | 0)]++;
+    w.chunks[sp * CN + ((c2.y / CH) | 0) * CW + ((c2.x / CH) | 0)]++;
+    emit(w, { t: 'inject', sp, x: c1.x, y: c1.y, x2: c2.x, y2: c2.y });
+    return [m, f];
+  }
+
+  function shannon(counts) {
+    let tot = 0; for (const c of counts) tot += c;
+    if (!tot) return 0;
+    let h = 0;
+    for (const c of counts) if (c > 0) { const p = c / tot; h -= p * Math.log(p); }
+    return h;
+  }
+
+  return { W, H, N, YEAR, SPECIES, CAUSES, T_GRASS, T_WATER, T_TREE, T_ROCK, HIST_CAP, SAMPLE_EVERY,
+    createWorld, step, inject, seasonInfo, shannon, catchProb };
+})();
+if (typeof module !== 'undefined') module.exports = GOL;
+</script>
+
+<!-- ===================== RENDERING + UI ===================== -->
+<script>
+(() => {
+'use strict';
+const { W, H, SPECIES, YEAR, T_GRASS, T_WATER, T_TREE, T_ROCK } = GOL;
+const CELL = 6, PW = W * CELL, PH = H * CELL;
+const $ = s => document.querySelector(s);
+const storage = {
+  get(k, d) { try { const v = localStorage.getItem('gol.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('gol.' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
+};
+
+// ---------------- colour helpers ----------------
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const c8 = v => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+const pack = c => ((255 << 24) | (c8(c[2]) << 16) | (c8(c[1]) << 8) | c8(c[0])) >>> 0;
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const mul = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
+const dimC = c => { const L = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11; return mul(mix(c, [L, L, L], 0.6), 0.42); };
+function hash3(x, y, z) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(z, 1440662683)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+const unpackCss = u => `rgb(${u & 255},${(u >>> 8) & 255},${(u >>> 16) & 255})`;
+
+// ---------------- terrain tiles ----------------
+const GL = 16, DL = 8, VAR = 4;
+const grassTiles = new Uint32Array(GL * DL * VAR * 2 * 36);
+const gIdx = (l, d, v, dim) => (((l * DL + d) * VAR + v) * 2 + dim) * 36;
+(function buildGrass() {
+  const wet = hex('#3c7a35'), dry = hex('#a8984a'), soilW = hex('#5a452f'), soilD = hex('#7a6141');
+  for (let l = 0; l < GL; l++) for (let d = 0; d < DL; d++) for (let v = 0; v < VAR; v++) for (let dim = 0; dim < 2; dim++) {
+    const gv = l / (GL - 1), dv = d / (DL - 1);
+    const base = mix(mix(soilW, soilD, dv), mix(wet, dry, dv), Math.pow(gv, 0.65));
+    const o = gIdx(l, d, v, dim);
+    for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
+      let c = mul(base, 0.93 + hash3(px, py, v * 7 + 1) * 0.14);
+      const blade = gv > 0.3 && py < 5 && hash3(px, py, v * 13 + 5) < gv * 0.3;
+      const under = gv > 0.3 && py > 0 && hash3(px, py - 1, v * 13 + 5) < gv * 0.3;
+      if (blade) c = mul(c, 1.2); else if (under) c = mul(c, 0.8);
+      if (gv < 0.25 && hash3(px, py, v * 17 + 9) < 0.07) c = mul(c, 1.28);
+      grassTiles[o + py * 6 + px] = pack(dim ? dimC(c) : c);
+    }
+  }
+})();
+const waterTiles = new Uint32Array(4 * 2 * VAR * 2 * 36);
+const wIdx = (f, deep, v, dim) => (((f * 2 + deep) * VAR + v) * 2 + dim) * 36;
+(function buildWater() {
+  const deepC = hex('#1a3874'), shal = hex('#2b66a6'), foam = hex('#a8dcff');
+  for (let f = 0; f < 4; f++) for (let dp = 0; dp < 2; dp++) for (let v = 0; v < VAR; v++) for (let dim = 0; dim < 2; dim++) {
+    const o = wIdx(f, dp, v, dim);
+    for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
+      let c = mul(dp ? deepC : shal, 0.95 + hash3(px, py, v + 50) * 0.1);
+      if ((px + py * 2 + f * 2 + v * 3) % 11 === 0) c = mix(c, foam, 0.3);
+      if (hash3(px, py, v * 31 + f) < 0.03) c = mix(c, foam, 0.85);
+      waterTiles[o + py * 6 + px] = pack(dim ? dimC(c) : c);
+    }
+  }
+})();
+function maskTile(rows, pal, bg) {
+  const out = new Uint32Array(72);
+  for (let dim = 0; dim < 2; dim++) for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
+    const ch = rows[py][px];
+    let c = ch === '.' ? mul(bg, 0.94 + hash3(px, py, 77) * 0.12) : hex(pal[ch]);
+    out[dim * 36 + py * 6 + px] = pack(dim ? dimC(c) : c);
+  }
+  return out;
+}
+const treeTile = maskTile(['.hhhh.', 'hhcchh', 'cccccc', '..t...', '..t...', '.sss..'],
+  { h: '#5e9a3e', c: '#2f5e2a', t: '#5a3a22', s: '#3f3a22' }, hex('#6a6a38'));
+const rockTile = maskTile(['......', '..hh..', '.hrrr.', 'hrrrrs', 'rrrrss', '.ssss.'],
+  { h: '#b8b2a4', r: '#878275', s: '#55524a' }, hex('#6e6a3c'));
+
+// ---------------- sprites ----------------
+const MASKS = [
+  { m: ['...aa.', '.bbbba', 'bbbbeb', 'bbbbbb', 'bwbbb.', 'd.d.d.'],
+    f: ['......', '.bbbba', 'bbbbeb', 'bbbbbb', 'bwbbb.', 'd.d.d.'] },
+  { m: ['....a.', '....ab', 'bbbbbe', 'wwwbb.', '.d..d.', '.d..d.'],
+    f: ['......', '....bb', 'bbbbbe', 'wwwbb.', '.d..d.', '.d..d.'] },
+  { m: ['...a..', '...ab.', '..bbbe', '.bbbb.', 'bbbbb.', '.d.d..'],
+    f: ['...a..', '...ab.', '..bbbe', '.bbbb.', 'bbbbb.', '.d.d..'] },
+  { m: ['......', '...aaa', 'a.aaea', '.bbaab', '.bbbb.', '.d..d.'],
+    f: ['......', '....bb', 'a...be', '.bbbbb', '.bbbb.', '.d..d.'] },
+  { m: ['......', '....bb', 'd...be', 'bbdbdb', '.bdbb.', '.d..d.'],
+    f: ['......', '....bb', 'd...be', 'bbdbdb', '.bdbb.', '.d..d.'] },
+];
+const PAL = [
+  { b: '#4f74e8', a: '#efe6c8', d: '#232d5c', w: '#9fb4ff', e: '#0d0f1a' },
+  { b: '#36c9b4', a: '#1c4a44', d: '#1a665c', w: '#e8fff8', e: '#0e1a18' },
+  { b: '#e9e4d4', a: '#ff9db0', d: '#958d7c', w: '#ffffff', e: '#2a1f1f' },
+  { b: '#ffc61a', a: '#b4471c', d: '#8a5a10', w: '#ffe08a', e: '#2a1408' },
+  { b: '#ff5468', a: '#ffd0d6', d: '#3a1418', w: '#ffb0b8', e: '#1a0a0a' },
+];
+const SEX_COL = ['#ff7ac8', '#5aa9ff']; // female, male
+const ENERGY_COL = ['#ff2f2f', '#ff5a2a', '#ff8a24', '#ffb31f', '#ffd23f', '#c8e83a', '#8cf04a', '#4dff6a'];
+const NVAR = 10; // 0 normal, 1 sex, 2..9 energy
+const sprites = new Uint32Array(5 * 2 * 2 * 2 * NVAR * 36);
+const sIdx = (sp, male, left, juv, v) => (((((sp * 2 + male) * 2 + left) * 2 + juv) * NVAR) + v) * 36;
+function buildSprite(rows, pal, flip, juv) {
+  let g = rows.map(r => r.split(''));
+  if (juv) {
+    const s = Array.from({ length: 6 }, () => Array(6).fill('.'));
+    for (let ty = 0; ty < 4; ty++) for (let tx = 0; tx < 4; tx++) s[ty + 2][tx + 1] = g[Math.round(ty * 5 / 3)][Math.round(tx * 5 / 3)];
+    g = s;
+  }
+  const out = new Uint32Array(36);
+  const filled = (x, y) => x >= 0 && y >= 0 && x < 6 && y < 6 && g[y][x] !== '.';
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++) {
+    const ch = g[y][x], ox = flip ? 5 - x : x;
+    if (ch === '.') {
+      if (y >= 4) { let col = false; for (let yy = 0; yy < y; yy++) if (g[yy][x] !== '.') col = true; if (col) out[y * 6 + ox] = 1; }
+      continue;
+    }
+    let c = hex(pal[ch]);
+    if (ch !== 'e' && ch !== 'd') {
+      if (!filled(x, y - 1)) c = mix(c, [255, 255, 255], 0.28);
+      else if (!filled(x, y + 1)) c = mul(c, 0.72);
+    }
+    out[y * 6 + ox] = pack(c);
+  }
+  return out;
+}
+(function buildSprites() {
+  for (let sp = 0; sp < 5; sp++) for (let male = 0; male < 2; male++) for (let left = 0; left < 2; left++) for (let juv = 0; juv < 2; juv++) for (let v = 0; v < NVAR; v++) {
+    const pal = Object.assign({}, PAL[sp]);
+    if (v === 1) pal.b = SEX_COL[male];
+    else if (v >= 2) pal.b = ENERGY_COL[v - 2];
+    sprites.set(buildSprite(male ? MASKS[sp].m : MASKS[sp].f, pal, !!left, !!juv), sIdx(sp, male, left, juv, v));
+  }
+})();
+function spriteURL(sp, male, scale, bg) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 6 * scale + (bg ? 2 * scale : 0);
+  const x = c.getContext('2d');
+  if (bg) { x.fillStyle = bg; x.fillRect(0, 0, c.width, c.height); }
+  const o = sIdx(sp, male, 0, 0, 0), pad = bg ? scale : 0;
+  for (let i = 0; i < 36; i++) {
+    const u = sprites[o + i]; if (u <= 1) continue;
+    x.fillStyle = unpackCss(u); x.fillRect(pad + (i % 6) * scale, pad + ((i / 6) | 0) * scale, scale, scale);
+  }
+  return c.toDataURL();
+}
+const ICONS = SPECIES.map((s, i) => spriteURL(i, 1, 4));
+const ICONS_F = SPECIES.map((s, i) => spriteURL(i, 0, 4));
+
+// ---------------- sound ----------------
+const Sfx = {
+  ctx: null, on: storage.get('sound', true), last: {},
+  init() {
+    if (this.ctx) return;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ctx = null; }
+  },
+  tone(freq, dur, type, vol, slide, delay) {
+    if (!this.on || !this.ctx) return;
+    const t0 = this.ctx.currentTime + (delay || 0);
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || 'square'; o.frequency.setValueAtTime(freq, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), t0 + dur);
+    g.gain.setValueAtTime(vol || 0.035, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(this.ctx.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+  },
+  play(name) {
+    if (!this.on || !this.ctx) return;
+    const now = performance.now();
+    const gap = { fight: 250, kill: 120, birth: 160, mate: 200 }[name] || 60;
+    if (this.last[name] && now - this.last[name] < gap) return;
+    this.last[name] = now;
+    switch (name) {
+      case 'inject': [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.09, 'square', 0.03, 0, i * 0.06)); break;
+      case 'select': this.tone(880, 0.05, 'square', 0.02); break;
+      case 'birth': this.tone(1320, 0.05, 'triangle', 0.02); break;
+      case 'mate': this.tone(988, 0.06, 'triangle', 0.018); this.tone(1319, 0.08, 'triangle', 0.018, 0, 0.06); break;
+      case 'kill': this.tone(180, 0.08, 'sawtooth', 0.02, 0.5); break;
+      case 'fight': this.tone(140, 0.15, 'sawtooth', 0.035, 0.4); this.tone(90, 0.12, 'square', 0.025, 0.6, 0.05); break;
+      case 'extinct': [392, 330, 262, 196].forEach((f, i) => this.tone(f, 0.18, 'triangle', 0.04, 0, i * 0.15)); break;
+      case 'goal': [523, 659, 784, 659, 1047].forEach((f, i) => this.tone(f, 0.1, 'square', 0.03, 0, i * 0.08)); break;
+      case 'click': this.tone(440, 0.03, 'square', 0.015); break;
+    }
+  },
+};
+
+// ---------------- state ----------------
+let world = null, running = false, speedIdx = 0, tool = -1, viewMode = 0;
+const SPEEDS = [1, 2, 4, 8, 16], BASE_TPS = 10;
+let hover = null, selected = null, particles = [], frameNo = 0;
+let chartRange = 180;
+const hiddenSeries = new Set();
+let journalUnread = 0, notesShown = new Set(), objDone = {}, goalTrack = {};
+let lastYearSnap = null, milestones = {}, everHadPred = false, prevSeasonLogged = '';
+
+const canvas = $('#world'), ctx = canvas.getContext('2d', { alpha: false });
+const img = ctx.createImageData(PW, PH);
+const frameBuf = new Uint32Array(img.data.buffer);
+const terrainBuf = new Uint32Array(PW * PH);
+const lastKey = new Int32Array(W * H);
+let cellVar = new Uint8Array(W * H), waterDeep = new Uint8Array(W * H);
+
+function prepWorldGfx() {
+  lastKey.fill(-1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    cellVar[i] = (hash3(x, y, world.seed & 0xffff) * VAR) | 0;
+    let deep = 1;
+    if (world.terrain[i] === T_WATER) {
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H && world.terrain[ny * W + nx] !== T_WATER) deep = 0;
+      }
+    }
+    waterDeep[i] = deep;
+  }
+}
+
+function blit(src, off, cx, cy) {
+  let d = cy * CELL * PW + cx * CELL;
+  for (let py = 0; py < 6; py++, d += PW) {
+    const s = off + py * 6;
+    terrainBuf[d] = src[s]; terrainBuf[d + 1] = src[s + 1]; terrainBuf[d + 2] = src[s + 2];
+    terrainBuf[d + 3] = src[s + 3]; terrainBuf[d + 4] = src[s + 4]; terrainBuf[d + 5] = src[s + 5];
+  }
+}
+
+function updateTerrain() {
+  const si = GOL.seasonInfo(world);
+  const dry = Math.round(si.dryness * (DL - 1));
+  const wf = (frameNo >> 4) & 3, dim = viewMode ? 1 : 0;
+  const ter = world.terrain, gr = world.grass;
+  for (let cy = 0, i = 0; cy < H; cy++) for (let cx = 0; cx < W; cx++, i++) {
+    const t = ter[i], v = cellVar[i];
+    let key, src, off;
+    if (t === T_GRASS) {
+      const l = Math.min(GL - 1, (gr[i] * (GL - 1) + 0.5) | 0);
+      off = gIdx(l, dry, v, dim); key = off; src = grassTiles;
+    } else if (t === T_WATER) {
+      off = wIdx((wf + v) & 3, waterDeep[i], v, dim); key = 1e7 + off; src = waterTiles;
+    } else if (t === T_TREE) { off = dim * 36; key = 2e7 + off; src = treeTile; }
+    else { off = dim * 36; key = 3e7 + off; src = rockTile; }
+    if (key !== lastKey[i]) { lastKey[i] = key; blit(src, off, cx, cy); }
+  }
+}
+
+function darken(c) {
+  return ((255 << 24) | ((((c >>> 16) & 255) * 0.55) << 16) | ((((c >>> 8) & 255) * 0.55) << 8) | ((c & 255) * 0.55)) >>> 0;
+}
+function blend(d, s, red) {
+  let r = s & 255, g = (s >>> 8) & 255, b = (s >>> 16) & 255;
+  if (red) { r = 255; g = 60; b = 60; }
+  return ((255 << 24) | ((((d >>> 16) & 255) + b) >> 1 << 16) | ((((d >>> 8) & 255) + g) >> 1 << 8) | (((d & 255) + r) >> 1)) >>> 0;
+}
+function drawSprite(off, cx, cy, ghost, red) {
+  const base = cy * CELL * PW + cx * CELL;
+  for (let py = 0; py < 6; py++) {
+    const row = base + py * PW, so = off + py * 6;
+    for (let px = 0; px < 6; px++) {
+      const c = sprites[so + px];
+      if (!c) continue;
+      const idx = row + px;
+      if (c === 1) { if (!ghost) frameBuf[idx] = darken(frameBuf[idx]); }
+      else frameBuf[idx] = ghost ? blend(frameBuf[idx], c, red) : c;
+    }
+  }
+}
+function setPx(x, y, c) {
+  x |= 0; y |= 0;
+  if (x < 0 || y < 0 || x >= PW || y >= PH) return;
+  frameBuf[y * PW + x] = c;
+}
+function rectOutline(x0, y0, w, h, c, gapCorners) {
+  for (let x = x0; x < x0 + w; x++) {
+    if (gapCorners && x > x0 + 1 && x < x0 + w - 2) continue;
+    setPx(x, y0, c); setPx(x, y0 + h - 1, c);
+  }
+  for (let y = y0; y < y0 + h; y++) {
+    if (gapCorners && y > y0 + 1 && y < y0 + h - 2) continue;
+    setPx(x0, y, c); setPx(x0 + w - 1, y, c);
+  }
+}
+
+const WHITE = pack([255, 255, 255]), GOLD = pack(hex('#ffd23f')), RED = pack(hex('#ff4d5e'));
+const HEART = ['.x.x.', 'xxxxx', '.xxx.', '..x..'];
+
+function render() {
+  frameNo++;
+  updateTerrain();
+  frameBuf.set(terrainBuf);
+  const A = world.animals;
+  for (let k = 0; k < A.length; k++) {
+    const a = A[k];
+    if (!a.alive) continue;
+    const S = SPECIES[a.sp];
+    let v = 0;
+    if (viewMode === 1) v = 1;
+    else if (viewMode === 2) v = 2 + Math.min(7, Math.max(0, (a.energy / S.maxE * 8) | 0));
+    drawSprite(sIdx(a.sp, a.male ? 1 : 0, a.face < 0 ? 1 : 0, a.age < S.mature ? 1 : 0, v), a.x, a.y, false);
+  }
+  // particles
+  for (const p of particles) {
+    const fade = p.life / p.max;
+    if (p.kind === 'heart') {
+      const c = pack(mix(hex('#ff7ac8'), [255, 255, 255], 1 - fade));
+      for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (HEART[yy][xx] === 'x') setPx(p.x + xx - 2, p.y + yy - 2, c);
+    } else if (p.kind === 'ring') {
+      const rad = (1 - fade) * 16 + 2, c = fade > 0.5 ? pack(hex(p.col)) : WHITE;
+      for (let k = 0; k < 28; k++) { const an = k / 28 * Math.PI * 2; setPx(p.x + Math.cos(an) * rad, p.y + Math.sin(an) * rad, c); }
+    } else if (p.kind === 'star') {
+      const c = fade > 0.5 ? WHITE : pack(hex('#ffb31f')), r = Math.round((1 - fade) * 4) + 1;
+      for (let k = -r; k <= r; k++) { setPx(p.x + k, p.y, c); setPx(p.x, p.y + k, c); }
+      setPx(p.x - r + 1, p.y - r + 1, RED); setPx(p.x + r - 1, p.y + r - 1, RED); setPx(p.x + r - 1, p.y - r + 1, RED); setPx(p.x - r + 1, p.y + r - 1, RED);
+    } else {
+      setPx(p.x, p.y, p.c);
+      if (p.big) { setPx(p.x + 1, p.y, p.c); setPx(p.x, p.y + 1, p.c); setPx(p.x + 1, p.y + 1, p.c); }
+    }
+  }
+  // selection & ghost
+  if (selected && selected.alive) {
+    const c = (frameNo >> 3) & 1 ? GOLD : WHITE;
+    rectOutline(selected.x * CELL - 2, selected.y * CELL - 2, CELL + 4, CELL + 4, c, true);
+  }
+  if (hover) {
+    if (tool >= 0) {
+      const ok = world.terrain[hover.y * W + hover.x] === T_GRASS;
+      drawSprite(sIdx(tool, 1, 0, 0, 0), hover.x, hover.y, true, !ok);
+      if (hover.x + 1 < W) drawSprite(sIdx(tool, 0, 0, 0, 0), hover.x + 1, hover.y, true, !ok);
+      rectOutline(hover.x * CELL - 1, hover.y * CELL - 1, CELL * 2 + 2, CELL + 2, ok ? GOLD : RED, false);
+    } else {
+      rectOutline(hover.x * CELL - 1, hover.y * CELL - 1, CELL + 2, CELL + 2, pack([255, 255, 255]), true);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ---------------- particles ----------------
+function spawn(kind, cx, cy, opts) {
+  if (particles.length > 700 && kind !== 'ring' && kind !== 'star') return;
+  const x = cx * CELL + 3, y = cy * CELL + 3, o = opts || {};
+  switch (kind) {
+    case 'birth':
+      for (let i = 0; i < 4; i++) particles.push({ kind: 'px', x: x + (Math.random() * 8 - 4), y, vx: (Math.random() - 0.5) * 10, vy: -10 - Math.random() * 14, life: 0.7, max: 0.7, c: pack(hex(i % 2 ? '#fff6a8' : '#ffffff')) });
+      break;
+    case 'heart': particles.push({ kind: 'heart', x, y: y - 4, vx: 0, vy: -12, life: 1, max: 1 }); break;
+    case 'kill':
+      for (let i = 0; i < 7; i++) particles.push({ kind: 'px', x, y, vx: (Math.random() - 0.5) * 40, vy: -Math.random() * 30, g: 80, life: 0.5, max: 0.5, c: pack(hex(i % 3 ? '#e02a3a' : '#ff8a8a')), big: i < 2 });
+      break;
+    case 'gore':
+      for (let i = 0; i < 6; i++) particles.push({ kind: 'px', x, y, vx: (Math.random() - 0.5) * 30, vy: -Math.random() * 20, g: 40, life: 0.5, max: 0.5, c: pack(hex('#e8e0c0')) });
+      break;
+    case 'star': particles.push({ kind: 'star', x, y, vx: 0, vy: 0, life: 0.6, max: 0.6 }); break;
+    case 'ring': particles.push({ kind: 'ring', x, y, vx: 0, vy: 0, life: 0.7, max: 0.7, col: o.col || '#4fe0c8' }); break;
+    case 'soul': particles.push({ kind: 'px', x, y, vx: 0, vy: -8, life: 0.8, max: 0.8, c: pack(hex('#8c8fa8')) }); break;
+  }
+}
+function updateParticles(dt) {
+  for (const p of particles) {
+    p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.g) p.vy += p.g * dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ---------------- journal / toast ----------------
+function dateStr(t) { const y = Math.floor(t / YEAR) + 1, d = (t % YEAR) + 1; return `Y${y} D${d}`; }
+function log(text, kind) {
+  const ul = $('#journal');
+  const li = document.createElement('li');
+  li.className = kind || '';
+  li.innerHTML = `<span class="d">${dateStr(world.tick)}</span>${kind === 'note' ? '<span class="tag">FIELD NOTE</span>' : ''}${text}`;
+  ul.prepend(li);
+  while (ul.children.length > 200) ul.lastChild.remove();
+  if (!$('#tab-journal').classList.contains('on')) { journalUnread++; const b = $('#jBadge'); b.textContent = journalUnread; b.style.display = 'inline-block'; }
+}
+const toastQ = [];
+let toastBusy = false;
+function toast(text) {
+  toastQ.push(text);
+  if (!toastBusy) nextToast();
+}
+function nextToast() {
+  const el = $('#toast');
+  if (!toastQ.length) { toastBusy = false; el.classList.remove('show'); return; }
+  toastBusy = true;
+  el.textContent = toastQ.shift();
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  setTimeout(nextToast, 2600);
+}
+
+const NOTES = {
+  welcome: 'Welcome, ranger! Every pixel here is one animal deciding for itself what to do: eat, flee, hunt or find a mate. Nothing is scripted. Every rise and fall in the charts comes from those choices.',
+  inject: '<b>Founder population.</b> You just released one breeding pair. Real reintroductions release several animals, because a very small population can disappear through bad luck alone.',
+  kill: '<b>Energy transfer.</b> A predator gets only part of the energy its prey gathered, and the rest was already spent living. That is why predators are always far fewer than prey: the energy pyramid.',
+  fight: '<b>Intraguild predation.</b> Lions really do kill cheetahs and their cubs. They don\'t eat them; they are removing a rival that hunts the same prey.',
+  gore: '<b>Herd defence.</b> Buffalo fight back. Attacking a buffalo that has other buffalo beside it is especially dangerous for a predator.',
+  dry: '<b>Dry season.</b> Grass now grows slowly, so the land can feed fewer grazers. Its carrying capacity has dropped.',
+  wet: '<b>The rains return.</b> Grass is the ecosystem\'s primary producer, and its growth surges now. Grazers will soon breed faster.',
+  hareBoom: '<b>r-selection.</b> Hares mature quickly and have big litters, so their numbers can explode in good times and crash just as fast.',
+  lag: '<b>Predator–prey lag.</b> Prey are falling while predators are still rising. Predators react to food supply with a delay, which is the core of the Lotka–Volterra cycle. Compare the two charts.',
+  extinct: '<b>Extinction.</b> In nature it is permanent. Here you can use the Inject tool to release a couple and see if they re-establish.',
+  noPred: '<b>No predators left.</b> Without them, grazers multiply until the grass runs out. This kind of chain reaction is called a trophic cascade, and it can end in mass starvation.',
+  overgraze: '<b>Overgrazing.</b> Grass is nearly gone across the savanna, and bare ground regrows slowly. Starvation will push grazer numbers back below carrying capacity.',
+  cubs: '<b>Parental care.</b> Lion and cheetah cubs follow their mother and share her kills. If she dies, young cubs rarely survive. This is part of why big predators breed so slowly.',
+};
+function note(id) {
+  if (notesShown.has(id)) return;
+  notesShown.add(id);
+  log(NOTES[id], 'note');
+}
+
+// ---------------- objectives ----------------
+const OBJECTIVES = [
+  { id: 'couple', t: 'Matchmaker', d: 'Release your first ♂+♀ couple.', p: () => sumArr(world.injected) >= 1, prog: () => `${Math.min(1, sumArr(world.injected))}/1` },
+  { id: 'boom', t: 'Baby Boom', d: 'Witness 500 births.', p: () => sumArr(world.births) >= 500, prog: () => `${Math.min(500, sumArr(world.births))}/500` },
+  { id: 'chain', t: 'Circle of Life', d: 'Predators make 100 successful hunts.', p: () => sumArr(world.kills) >= 100, prog: () => `${Math.min(100, sumArr(world.kills))}/100` },
+  { id: 'rival', t: 'Rivalry', d: 'Witness 10 fights between lions and cheetahs.', p: () => world.fights >= 10, prog: () => `${Math.min(10, world.fights)}/10` },
+  { id: 'coexist', t: 'Coexistence', d: 'Keep all 5 species alive for 3 years in a row.', p: () => coexistDays() >= YEAR * 3, prog: () => `${(coexistDays() / YEAR).toFixed(1)}/3 yrs` },
+  { id: 'diverse', t: 'Thriving Ecosystem', d: 'Reach a biodiversity index (Shannon H) of 1.30.', p: () => GOL.shannon(world.counts) >= 1.3, prog: () => `${GOL.shannon(world.counts).toFixed(2)}/1.30` },
+  { id: 'rescue', t: 'Second Chance', d: 'Reintroduce a species after it went extinct and keep it alive for 1 year.', p: () => rescueOK(), prog: () => rescueProg() },
+  { id: 'decade', t: 'Long Haul', d: 'Reach Year 10 with lions and cheetahs both alive.', p: () => world.tick >= YEAR * 9 && world.counts[3] > 0 && world.counts[4] > 0, prog: () => `Y${Math.floor(world.tick / YEAR) + 1}/10` },
+];
+const sumArr = a => a.reduce((s, v) => s + v, 0);
+function coexistDays() { return goalTrack.coexistStart === undefined ? 0 : world.tick - goalTrack.coexistStart; }
+function rescueOK() { return (goalTrack.rescue || []).some(r => r && world.tick - r.start >= YEAR && world.counts[r.sp] > 0); }
+function rescueProg() {
+  const live = (goalTrack.rescue || []).filter(r => r && world.counts[r.sp] > 0);
+  if (!live.length) return '—';
+  const best = Math.max(...live.map(r => world.tick - r.start));
+  return `${Math.min(YEAR, best)}/${YEAR} d`;
+}
+function buildObjectives() {
+  $('#objectives').innerHTML = OBJECTIVES.map(o => `
+    <div class="obj" id="obj-${o.id}"><div class="ck">■</div>
+      <div><div class="t">${o.t}</div><div class="s">${o.d}</div></div><div class="p" id="objp-${o.id}"></div></div>`).join('');
+}
+function updateObjectives() {
+  // coexistence tracking
+  const all = world.counts.every(c => c > 0);
+  if (all) { if (goalTrack.coexistStart === undefined) goalTrack.coexistStart = world.tick; }
+  else goalTrack.coexistStart = undefined;
+  let done = 0;
+  for (const o of OBJECTIVES) {
+    if (!objDone[o.id] && o.p()) {
+      objDone[o.id] = world.tick;
+      toast(`★ OBJECTIVE COMPLETE: ${o.t.toUpperCase()}`);
+      log(`★ Objective complete: <b>${o.t}</b>. ${o.d}`, 'gold');
+      Sfx.play('goal');
+    }
+    const el = $('#obj-' + o.id);
+    if (objDone[o.id] !== undefined) { done++; el.classList.add('done'); el.querySelector('.ck').textContent = '★'; $('#objp-' + o.id).textContent = dateStr(objDone[o.id]); }
+    else { el.classList.remove('done'); el.querySelector('.ck').textContent = '■'; $('#objp-' + o.id).textContent = o.prog(); }
+  }
+  $('#objCount').textContent = `${done}/${OBJECTIVES.length}`;
+}
+
+// ---------------- events ----------------
+function processEvents() {
+  const ev = world.events;
+  if (!ev.length) return;
+  const heavy = SPEEDS[speedIdx] >= 8;
+  for (const e of ev) {
+    const S = e.sp !== undefined ? SPECIES[e.sp] : null;
+    switch (e.t) {
+      case 'birth':
+        if (!heavy || Math.random() < 0.3) spawn('birth', e.x, e.y);
+        if (e.sp >= 3) note('cubs');
+        Sfx.play('birth');
+        break;
+      case 'mate': if (!heavy || Math.random() < 0.3) spawn('heart', e.x, e.y); Sfx.play('mate'); break;
+      case 'kill': spawn('kill', e.x, e.y); Sfx.play('kill'); note('kill'); break;
+      case 'gore': spawn('gore', e.x, e.y); note('gore'); break;
+      case 'death': if (!heavy && Math.random() < 0.5) spawn('soul', e.x, e.y); break;
+      case 'fight':
+        spawn('star', e.x, e.y); Sfx.play('fight'); note('fight');
+        if (world.fights <= 3 || e.killed && world.fights % 5 === 0)
+          log(`⚔ A ${SPECIES[e.win].name.toLowerCase()} fought a ${SPECIES[e.lose].name.toLowerCase()}. The ${SPECIES[e.lose].name.toLowerCase()} ${e.killed ? 'was killed' : 'fled, wounded'}.`, 'bad');
+        break;
+      case 'inject':
+        spawn('ring', e.x, e.y, { col: S.color }); spawn('ring', e.x2, e.y2, { col: S.color });
+        Sfx.play('inject');
+        break;
+      case 'extinct':
+        toast(`☠ ${S.plural.toUpperCase()} HAVE GONE EXTINCT`);
+        log(`☠ <b>${S.plural}</b> are extinct.`, 'bad');
+        Sfx.play('extinct'); note('extinct');
+        break;
+      case 'season':
+        if (e.name === 'Dry season') { log('☀ The dry season begins. Grass growth slows.', ''); note('dry'); }
+        else if (e.name === 'Wet season') { log('☂ The rains arrive. Grass grows fast again.', ''); if (world.tick > YEAR / 2) note('wet'); }
+        break;
+      case 'year': yearSummary(e.year); break;
+    }
+  }
+  ev.length = 0;
+}
+
+function yearSummary(year) {
+  const snap = { births: sumArr(world.births), kills: sumArr(world.kills), fights: world.fights, counts: world.counts.slice() };
+  if (lastYearSnap) {
+    const arrow = s => { const d = snap.counts[s] - lastYearSnap.counts[s]; return d > 0 ? `<span style="color:var(--green)">▲${d}</span>` : d < 0 ? `<span style="color:var(--red)">▼${-d}</span>` : '='; };
+    log(`📅 <b>Year ${year - 1} summary:</b> ${snap.births - lastYearSnap.births} births, ${snap.kills - lastYearSnap.kills} successful hunts, ${snap.fights - lastYearSnap.fights} rival fights. ` +
+      SPECIES.map((s, i) => `${s.plural} ${snap.counts[i]} ${arrow(i)}`).join(' · '), 'good');
+  }
+  lastYearSnap = snap;
+}
+
+function checkContextNotes() {
+  const h = world.hist, n = h.len;
+  const c = world.counts;
+  if (c[3] + c[4] > 0) everHadPred = true;
+  for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) {
+    const k = s + ':' + m;
+    if (!milestones[k] && c[s] >= m) { milestones[k] = true; log(`📈 ${SPECIES[s].plural} passed <b>${m}</b>!`, 'good'); }
+  }
+  if (world.avgGrass < 0.12 && world.tick > 60) note('overgraze');
+  if (everHadPred && c[3] + c[4] === 0 && c[0] + c[1] + c[2] > 50) note('noPred');
+  if (n > 31) {
+    const at = (s, k) => h.data[s][k % GOL.HIST_CAP];
+    const now = n - 1, past = n - 31;
+    if (at(2, now) >= 150 && at(2, now) >= 1.8 * Math.max(1, at(2, past))) note('hareBoom');
+    const prey = k => at(0, k) + at(1, k) + at(2, k), pred = k => at(3, k) + at(4, k);
+    if (pred(now) >= 6 && prey(now) < prey(past) * 0.8 && pred(now) > pred(past) * 1.1) note('lag');
+  }
+}
+
+// ---------------- charts ----------------
+function drawChart(cv, list, labelEl) {
+  const x = cv.getContext('2d'), cw = cv.width, chh = cv.height;
+  x.fillStyle = '#070918'; x.fillRect(0, 0, cw, chh);
+  const h = world.hist, n = h.len, range = chartRange, start = Math.max(0, n - range, n - GOL.HIST_CAP);
+  x.fillStyle = '#151a3a';
+  for (let k = 1; k < 4; k++) x.fillRect(0, Math.round(chh * k / 4), cw, 1);
+  const xOf = k => Math.floor((k - (n - range)) * cw / range);
+  x.fillStyle = '#232a5c';
+  for (let k = start; k < n; k++) if ((k * GOL.SAMPLE_EVERY) % YEAR === 0) x.fillRect(xOf(k), 0, 1, chh);
+  let max = 5;
+  for (const s of list) if (!hiddenSeries.has(s)) for (let k = start; k < n; k++) max = Math.max(max, h.data[s][k % GOL.HIST_CAP]);
+  max = Math.ceil(max * 1.1);
+  labelEl.textContent = 'max ' + max;
+  const yOf = v => chh - 2 - Math.round(v / max * (chh - 4));
+  for (const s of list) {
+    if (hiddenSeries.has(s)) continue;
+    x.fillStyle = SPECIES[s].color;
+    let py = null, px = null;
+    for (let k = start; k < n; k++) {
+      const X = xOf(k), Y = yOf(h.data[s][k % GOL.HIST_CAP]);
+      if (px === X && py !== null) { x.fillRect(X, Math.min(Y, py), 1, Math.abs(Y - py) + 1); py = Y; continue; }
+      if (py === null) x.fillRect(X, Y, 1, 1);
+      else { const top = Math.min(Y, py), bot = Math.max(Y, py); x.fillRect(X, top, 1, bot - top + 1); if (X - px > 1) x.fillRect(px, py, X - px, 1); }
+      px = X; py = Y;
+    }
+  }
+}
+
+// ---------------- side panels ----------------
+const STATS = [
+  { Reproduction: 1, Resilience: 5, 'Food value': 5, Speed: 1 },
+  { Reproduction: 3, Resilience: 3, 'Food value': 3, Speed: 4 },
+  { Reproduction: 5, Resilience: 1, 'Food value': 1, Speed: 3 },
+  { Reproduction: 1, Strength: 5, Speed: 3, Appetite: 5 },
+  { Reproduction: 2, Strength: 3, Speed: 5, Appetite: 3 },
+];
+const DESC = [
+  'Big, slow grazers. They breed slowly, one calf after a long pregnancy, but they are tough. They survive many attacks, and a herd fights back by goring attackers. One buffalo feeds a predator for a long time.',
+  'Fast and watchful. They notice danger from far away and run, so they are moderately hard to catch. They breed at a medium pace, with 1–2 fawns.',
+  'Small and easy to catch, but they breed very fast: early maturity, a short pregnancy and 2–4 young. Many are eaten and quickly replaced.',
+  'The strongest hunter, with moderate speed and slow breeding. Lions can bring down buffalo. Cubs follow their mother and share her kills. Lions also attack cheetahs, their main rivals.',
+  'The fastest animal here, moving two cells every turn, but only moderately strong. Buffalo are too dangerous for them, so they hunt gazelles and hares instead. They avoid lions, and will attack lion cubs left on their own.',
+];
+function buildSidebar() {
+  const grid = $('#spGrid');
+  grid.innerHTML = `<button class="sp-btn inspect on" data-tool="-1" title="Inspect tool (0)"><span class="ico">⌕</span><div><span class="nm">INSPECT</span><small>Hover to inspect · click to track</small></div></button>` +
+    SPECIES.map((s, i) => `<button class="sp-btn" data-tool="${i}" title="${s.name} (${i + 1})">
+      <img src="${ICONS[i]}" alt="">
+      <div><span class="nm" style="color:${s.color}">${s.name.toUpperCase()}</span><small>${s.role} · key ${i + 1}</small></div>
+      <div class="cnt"><b id="cnt-${i}">0</b><span id="sex-${i}">♂0 ♀0</span></div></button>`).join('');
+  grid.addEventListener('click', e => { const b = e.target.closest('.sp-btn'); if (b) setTool(+b.dataset.tool); });
+
+  $('#legend').innerHTML = SPECIES.map((s, i) => `<button class="legend-item" data-s="${i}" title="Show/hide on chart"><i style="background:${s.color}"></i>${s.plural}<b id="lg-${i}">0</b></button>`).join('');
+  $('#legend').addEventListener('click', e => {
+    const b = e.target.closest('.legend-item'); if (!b) return;
+    const s = +b.dataset.s;
+    if (hiddenSeries.has(s)) hiddenSeries.delete(s); else hiddenSeries.add(s);
+    b.classList.toggle('off', hiddenSeries.has(s));
+    drawCharts();
+  });
+
+  $('#guide').innerHTML = SPECIES.map((s, i) => `
+    <div class="card">
+      <div class="card-head"><img src="${spriteURL(i, 1, 6, '#0d2a12')}" alt="${s.name} sprite">
+        <div><div class="nm" style="color:${s.color}">${s.name.toUpperCase()}</div><div class="role" style="color:${s.isPrey ? 'var(--teal)' : 'var(--red)'}">${s.role.toUpperCase()}</div></div></div>
+      <p>${DESC[i]}</p>
+      ${Object.entries(STATS[i]).map(([k, v]) => `<div class="stat"><span>${k}</span><span class="pips">${[1, 2, 3, 4, 5].map(n => `<i class="${n <= v ? 'f' : ''}"></i>`).join('')}</span></div>`).join('')}
+      <div class="live" id="live-${i}"></div>
+    </div>`).join('');
+}
+
+function updateSidebar() {
+  const c = world.counts;
+  let tot = 0;
+  for (let i = 0; i < 5; i++) {
+    tot += c[i];
+    $('#cnt-' + i).textContent = c[i];
+    $('#sex-' + i).textContent = `♂${world.males[i]} ♀${c[i] - world.males[i]}`;
+    $('#lg-' + i).textContent = c[i];
+    const d = world.deaths[i];
+    $('#live-' + i).innerHTML = `
+      <span>Alive <b>${c[i]}</b></span><span>Young <b>${world.juveniles[i]}</b></span>
+      <span>Born <b>${world.births[i]}</b></span><span>${SPECIES[i].isPrey ? 'Eaten' : 'Hunts won'} <b>${SPECIES[i].isPrey ? d.eaten : world.kills[i]}</b></span>
+      <span>Starved <b>${d.starve}</b></span><span>Old age <b>${d.age}</b></span>
+      ${SPECIES[i].isPrey ? '' : `<span>Combat deaths <b>${d.fight}</b></span>`}<span>Released <b>${world.injected[i] * 2}</b></span>`;
+  }
+  const si = GOL.seasonInfo(world);
+  $('#chipDate').innerHTML = `YEAR <b>${Math.floor(world.tick / YEAR) + 1}</b> · DAY <b>${(world.tick % YEAR) + 1}</b>`;
+  $('#chipSeason').textContent = (si.name === 'Dry season' || si.name === 'Drying out' ? '☀ ' : '☂ ') + si.name.toUpperCase();
+  $('#chipPop').innerHTML = `ANIMALS <b>${tot}</b>`;
+  const H_ = GOL.shannon(c);
+  $('#bioVal').textContent = H_.toFixed(2);
+  $('#bioBar').style.width = (H_ / Math.log(5) * 100).toFixed(0) + '%';
+  $('#grassBar').style.width = Math.round(world.avgGrass * 100) + '%';
+  $('#grassBar').style.background = world.avgGrass < 0.2 ? '#b88a3a' : world.avgGrass < 0.4 ? '#a8b34a' : '#6cbf4a';
+}
+function drawCharts() {
+  drawChart($('#chartPrey'), [0, 1, 2], $('#preyMax'));
+  drawChart($('#chartPred'), [3, 4], $('#predMax'));
+}
+
+// ---------------- inspect ----------------
+const MODE_TEXT = { flee: 'Fleeing!', graze: 'Grazing', mate: 'Looking for a mate', hunt: 'Hunting', search: 'Searching for prey', rest: 'Resting', follow: 'Following mother', attack: 'Attacking a rival', wander: 'Roaming' };
+const CAUSE_TEXT = { eaten: 'was eaten by a', starve: 'starved', age: 'died of old age', fight: 'died in a fight with a' };
+function fmtAge(t) { const y = Math.floor(t / YEAR), d = t % YEAR; return (y ? y + 'y ' : '') + d + 'd'; }
+function animalHTML(a) {
+  const S = SPECIES[a.sp];
+  const sex = a.male ? '<span class="male">♂ male</span>' : '<span class="female">♀ female</span>';
+  const head = `<div class="tt-head"><img src="${a.male ? ICONS[a.sp] : ICONS_F[a.sp]}" alt=""><b style="color:${S.color}">${S.name}</b> ${sex}</div>`;
+  if (!a.alive) {
+    const by = a.by >= 0 ? ' ' + SPECIES[a.by].name.toLowerCase() : '';
+    return head + `<div class="tt-role">This ${S.name.toLowerCase()} ${CAUSE_TEXT[a.cause]}${by} at age ${fmtAge(a.age)}.</div>`;
+  }
+  const ef = Math.max(0, Math.min(1, a.energy / S.maxE));
+  const col = ENERGY_COL[Math.min(7, (ef * 8) | 0)];
+  const stage = a.age < S.mature ? 'Young' : a.age > a.life * 0.85 ? 'Elderly' : 'Adult';
+  return head + `<div class="tt-role">${S.role}${a.injected ? ' · released by you' : a.gen ? ' · generation ' + a.gen : ''}</div>
+    <div>Age: ${fmtAge(a.age)} (${stage})</div>
+    <div>Energy: <span class="bar"><i style="width:${(ef * 100).toFixed(0)}%;background:${col}"></i></span>${(ef * 100).toFixed(0)}%</div>
+    <div>Doing: <b>${MODE_TEXT[a.mode] || a.mode}</b></div>
+    ${a.preg > 0 ? `<div>Pregnant: ${a.preg} days to go</div>` : ''}
+    ${!S.isPrey && a.atk > 0 ? '<div style="color:var(--muted)">Recovering…</div>' : ''}`;
+}
+function animalAt(cx, cy) {
+  const o = world.occ[cy * W + cx];
+  if (o) return o;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const x = cx + dx, y = cy + dy;
+    if (x >= 0 && y >= 0 && x < W && y < H && world.occ[y * W + x]) return world.occ[y * W + x];
+  }
+  return null;
+}
+let lastMouse = null;
+function updateTooltip() {
+  const tt = $('#tooltip');
+  if (tool !== -1 || !hover || !lastMouse) { tt.style.display = 'none'; return; }
+  const a = animalAt(hover.x, hover.y);
+  if (!a || a === selected) { tt.style.display = 'none'; return; }
+  tt.innerHTML = animalHTML(a);
+  tt.style.display = 'block';
+  const wrap = $('#wrap').getBoundingClientRect();
+  let x = lastMouse.x - wrap.left + 16, y = lastMouse.y - wrap.top + 16;
+  if (x + tt.offsetWidth > wrap.width) x = lastMouse.x - wrap.left - tt.offsetWidth - 12;
+  if (y + tt.offsetHeight > wrap.height) y = lastMouse.y - wrap.top - tt.offsetHeight - 12;
+  tt.style.left = Math.max(0, x) + 'px'; tt.style.top = Math.max(0, y) + 'px';
+}
+function updateTracker() {
+  const el = $('#tracker');
+  if (!selected) { el.style.display = 'none'; return; }
+  el.innerHTML = `<button class="x" aria-label="Stop tracking">✕</button><div style="font-family:var(--px);font-size:7px;color:var(--gold);margin-bottom:4px">TRACKING</div>` + animalHTML(selected);
+  el.style.display = 'block';
+}
+$('#tracker').addEventListener('click', e => { if (e.target.closest('.x')) { selected = null; updateTracker(); } });
+
+// ---------------- controls ----------------
+function setTool(t) {
+  tool = t;
+  document.querySelectorAll('.sp-btn').forEach(b => b.classList.toggle('on', +b.dataset.tool === t));
+  $('#toolText').innerHTML = t < 0 ? 'Tool: <b>Inspect</b> — hover an animal, click to track it' :
+    `Tool: <b style="color:${SPECIES[t].color}">Release ${SPECIES[t].name} couple</b> — click the land`;
+  Sfx.play('select');
+}
+function setRunning(r) {
+  running = r;
+  $('#btnPlay').textContent = r ? '❚❚ PAUSE' : '▶ PLAY';
+  $('#pausedTag').classList.toggle('show', !r);
+}
+function setSpeed(i) { speedIdx = Math.max(0, Math.min(SPEEDS.length - 1, i)); $('#btnSpeed').textContent = `SPEED ${SPEEDS[speedIdx]}×`; }
+const VIEWS = ['NORMAL', 'SEX', 'ENERGY'];
+function setView(v) {
+  viewMode = v % 3;
+  $('#btnView').textContent = 'VIEW: ' + VIEWS[viewMode];
+  $('#viewLegend').innerHTML = viewMode === 1 ? '<span class="male">■ male</span> · <span class="female">■ female</span>' :
+    viewMode === 2 ? '<span class="legend-energy">starving <i></i> full</span>' : '';
+}
+function setSound(on) { Sfx.on = on; storage.set('sound', on); $('#btnSound').textContent = on ? '♪ ON' : '♪ OFF'; }
+
+$('#btnPlay').onclick = () => { Sfx.init(); setRunning(!running); };
+$('#btnStep').onclick = () => { setRunning(false); GOL.step(world); };
+$('#btnSpeed').onclick = () => setSpeed((speedIdx + 1) % SPEEDS.length);
+$('#btnView').onclick = () => setView(viewMode + 1);
+$('#btnSound').onclick = () => { Sfx.init(); setSound(!Sfx.on); };
+$('#btnNew').onclick = () => openTitle();
+$('#btnHelp').onclick = () => { $('#helpScreen').classList.add('show'); $('#btnCloseHelp').focus(); };
+$('#btnCloseHelp').onclick = () => $('#helpScreen').classList.remove('show');
+$('#btnRange').onclick = () => { chartRange = chartRange === 180 ? 900 : 180; $('#btnRange').textContent = chartRange === 180 ? '2 YEARS' : '10 YEARS'; drawCharts(); };
+$('#rain').oninput = e => { world.rain = e.target.value / 100; $('#rainVal').textContent = e.target.value + '%'; };
+$('#seasons').onchange = e => { world.seasons = e.target.checked; };
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('on', p.id === 'tab-' + t.dataset.tab));
+  if (t.dataset.tab === 'journal') { journalUnread = 0; $('#jBadge').style.display = 'none'; }
+});
+
+function cellFrom(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * W), y = Math.floor((e.clientY - r.top) / r.height * H);
+  if (x < 0 || y < 0 || x >= W || y >= H) return null;
+  return { x, y };
+}
+canvas.addEventListener('pointermove', e => { hover = cellFrom(e); lastMouse = { x: e.clientX, y: e.clientY }; updateTooltip(); });
+canvas.addEventListener('pointerleave', () => { hover = null; lastMouse = null; updateTooltip(); });
+canvas.addEventListener('pointerdown', e => {
+  Sfx.init();
+  const c = cellFrom(e); if (!c) return;
+  hover = c;
+  if (tool >= 0) {
+    const pairs = e.shiftKey ? 3 : 1;
+    let ok = 0;
+    for (let k = 0; k < pairs; k++) {
+      const ox = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8), oy = k === 0 ? 0 : Math.round((Math.random() - 0.5) * 8);
+      if (GOL.inject(world, tool, c.x + ox, c.y + oy)) ok++;
+    }
+    const S = SPECIES[tool];
+    if (ok) {
+      if (world.extinctAt[tool] >= 0) {
+        goalTrack.rescue = goalTrack.rescue || [];
+        if (!goalTrack.rescue.some(r => r && r.sp === tool && world.counts[tool] > 0 && r.start > world.extinctAt[tool]))
+          goalTrack.rescue.push({ sp: tool, start: world.tick });
+      }
+      log(`✚ You released ${ok > 1 ? ok + ' couples' : 'a couple'} of <b style="color:${S.color}">${S.plural.toLowerCase()}</b> (♂+♀).`, 'good');
+      note('inject');
+      processEvents();
+      updateSidebar();
+    } else { toast("NO ROOM HERE. TRY OPEN GRASSLAND"); Sfx.play('click'); }
+  } else {
+    const a = animalAt(c.x, c.y);
+    selected = a || null;
+    updateTracker(); updateTooltip();
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const titleOpen = $('#titleScreen').classList.contains('show'), helpOpen = $('#helpScreen').classList.contains('show');
+  if (helpOpen) { if (e.key === 'Escape' || e.key === 'h' || e.key === 'H') { $('#helpScreen').classList.remove('show'); e.preventDefault(); } return; }
+  if (titleOpen) { if (e.key === 'Escape' && world && titleCanClose) { closeTitle(); e.preventDefault(); } return; }
+  const k = e.key;
+  if (k === ' ') { e.preventDefault(); Sfx.init(); setRunning(!running); }
+  else if (k >= '1' && k <= '5') setTool(+k - 1);
+  else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; updateTracker(); } }
+  else if (k === '+' || k === '=') setSpeed(speedIdx + 1);
+  else if (k === '-' || k === '_') setSpeed(speedIdx - 1);
+  else if (k === 'v' || k === 'V') setView(viewMode + 1);
+  else if (k === 'm' || k === 'M') { Sfx.init(); setSound(!Sfx.on); }
+  else if (k === 'n' || k === 'N') openTitle();
+  else if (k === 'h' || k === 'H' || k === '?') $('#helpScreen').classList.add('show');
+  else if (k === '.') { setRunning(false); GOL.step(world); }
+});
+
+// ---------------- title screen ----------------
+let titleCanClose = false, demo = true;
+const parade = $('#parade'), pctx = parade.getContext('2d');
+const marchers = [];
+for (let i = 0; i < 14; i++) marchers.push({ sp: [2, 2, 1, 0, 1, 3, 2, 4, 1, 2, 0, 3, 4, 2][i], male: i % 2, x: -i * 26 - Math.random() * 10, speed: 0 });
+marchers.forEach(m => { m.speed = [10, 18, 14, 16, 26][m.sp]; });
+function drawParade(dt) {
+  pctx.fillStyle = '#5b8fd6'; pctx.fillRect(0, 0, 320, 24);
+  pctx.fillStyle = '#7fb0ea'; pctx.fillRect(0, 18, 320, 6);
+  pctx.fillStyle = '#ffd23f'; pctx.fillRect(270, 5, 10, 10);
+  pctx.fillStyle = '#3c7a35'; pctx.fillRect(0, 24, 320, 24);
+  pctx.fillStyle = '#4c8f3e'; for (let x = 0; x < 320; x += 7) pctx.fillRect(x, 24 + (x % 3), 2, 2);
+  for (const m of marchers) {
+    m.x += m.speed * dt;
+    if (m.x > 330) m.x = -20 - Math.random() * 40;
+    const bob = (Math.floor(m.x / 3) & 1);
+    const o = sIdx(m.sp, m.male, 0, 0, 0), sc = 2, X = Math.round(m.x), Y = 30 - bob;
+    for (let i = 0; i < 36; i++) {
+      const u = sprites[o + i]; if (!u) continue;
+      pctx.fillStyle = u === 1 ? 'rgba(0,0,0,.35)' : unpackCss(u);
+      pctx.fillRect(X + (i % 6) * sc, Y + ((i / 6) | 0) * sc, sc, sc);
+    }
+  }
+}
+function openTitle() {
+  titleCanClose = !!world && !demo;
+  $('#titleScreen').classList.add('show');
+  setRunning(false);
+}
+function closeTitle() { $('#titleScreen').classList.remove('show'); setRunning(true); }
+document.querySelectorAll('[data-preset]').forEach(el => el.addEventListener('click', e => {
+  e.stopPropagation();
+  Sfx.init(); Sfx.play('goal');
+  newWorld(el.dataset.preset);
+  $('#titleScreen').classList.remove('show');
+  setRunning(true);
+}));
+
+function newWorld(preset, isDemo) {
+  const seed = (Math.random() * 1e9) | 0;
+  world = GOL.createWorld(seed, preset);
+  demo = !!isDemo;
+  world.rain = $('#rain').value / 100;
+  world.seasons = $('#seasons').checked;
+  prepWorldGfx();
+  particles = []; selected = null; hover = null;
+  notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
+  lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
+  $('#journal').innerHTML = ''; journalUnread = 0; $('#jBadge').style.display = 'none';
+  $('#seedText').textContent = seed;
+  updateTracker();
+  if (!isDemo) {
+    note('welcome');
+    if (preset === 'empty') log('The land is empty. Pick an animal on the right and click the map to release a couple. Grazers first! Predators need something to eat.', 'good');
+    else log('A balanced savanna: buffalo, gazelles and hares graze while lions and cheetahs hunt.', 'good');
+  }
+  updateSidebar(); updateObjectives(); drawCharts();
+}
+
+// ---------------- main loop ----------------
+let last = performance.now(), tickAcc = 0, lastUi = 0;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const titleOpen = $('#titleScreen').classList.contains('show');
+  if (titleOpen) drawParade(dt);
+  const go = running || (titleOpen && demo);
+  if (world && go) {
+    tickAcc += dt * BASE_TPS * (titleOpen ? 1 : SPEEDS[speedIdx]);
+    const t0 = performance.now();
+    while (tickAcc >= 1) {
+      GOL.step(world); tickAcc -= 1;
+      if (performance.now() - t0 > 14) { tickAcc = Math.min(tickAcc, 1); break; }
+    }
+  }
+  if (world) {
+    if (!demo) processEvents(); else world.events.length = 0;
+    updateParticles(dt);
+    render();
+    if (now - lastUi > 250) {
+      lastUi = now;
+      updateSidebar(); drawCharts();
+      if (!demo) { updateObjectives(); checkContextNotes(); }
+      if (selected) { updateTracker(); if (!selected.alive && now - (selected._seenDead || (selected._seenDead = now)) > 6000) { selected = null; updateTracker(); } }
+      updateTooltip();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+buildSidebar();
+buildObjectives();
+setView(0); setSpeed(0); setSound(Sfx.on); setTool(-1);
+newWorld('balanced', true);
+setRunning(false);
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
