@@ -4,6 +4,8 @@ An educational, 16-bit-style ecosystem simulation in a single HTML file.
 Every pixel-creature is one animal that eats, flees, hunts and searches for a mate on its own.
 Population booms, crashes and predator–prey cycles emerge from those individual decisions.
 
+[![The Game of Life: a savanna in the dry season with buffalo, gazelles, hares, lions and cheetahs, plus the inject panel and population charts](docs/screenshot.png)](https://lonewolf4blitzkrieg.github.io/the-game-of-life/)
+
 **▶ Play online:** https://lonewolf4blitzkrieg.github.io/the-game-of-life/
 
 Or open `index.html` in any modern browser. No build step and no install. It works offline too (fonts fall back to monospace).
