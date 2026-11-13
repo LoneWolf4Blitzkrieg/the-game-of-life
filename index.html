@@ -89,6 +89,8 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 #tooltip,#tracker{position:absolute;pointer-events:none;background:rgba(10,12,30,.94);border:2px solid var(--edge);
   box-shadow: inset 1px 1px 0 var(--hi), 0 3px 0 #000;padding:6px 8px;font-size:18px;min-width:170px;display:none;z-index:5}
 #tracker{left:8px;bottom:8px;pointer-events:auto;border-color:var(--gold)}
+#btnFollow{margin-top:6px;padding:5px 8px;font-size:8px}
+#btnFollow.on{background:var(--gold);color:#1a1300;box-shadow:inset 2px 2px 0 #fff3b0,inset -2px -2px 0 #a07d00}
 #tracker .x{position:absolute;right:4px;top:2px;cursor:pointer;color:var(--muted);background:none;border:0;font-size:18px}
 .tt-head{display:flex;align-items:center;gap:6px;margin-bottom:3px}
 .tt-head img{width:24px;height:24px;image-rendering:pixelated}
@@ -245,7 +247,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         <canvas id="minimap" width="160" height="100" aria-label="Minimap: click or drag to move the view"></canvas>
         <div id="pausedTag">PAUSED</div>
         <div id="tooltip"></div>
-        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div></div>
+        <div id="tracker"><button class="x" aria-label="Stop tracking">✕</button><div id="trackerBody"></div><button class="btn" id="btnFollow" title="Keep the camera on this animal (F)" aria-pressed="false">FOLLOW</button></div>
         <div id="toast" role="status"></div>
       </div>
       <div class="statusbar">
@@ -1855,10 +1857,15 @@ function animalHTML(a) {
     ${a.preg > 0 ? `<div>Pregnant: ${a.preg} days to go</div>` : ''}
     ${!S.isPrey && a.atk > 0 ? '<div style="color:var(--muted)">Recovering…</div>' : ''}`;
 }
+// How far (in tiles) a click may miss an animal and still pick it: wider at whole-world zoom,
+// where tiles are only 3 px.
+const pickRadius = () => cam.zi === 0 ? 2 : 1;
+// The animal on tile (cx, cy), else the nearest one in rings 1..pickRadius() around it.
 function animalAt(cx, cy) {
   const o = world.occ[cy * W + cx];
   if (o) return o;
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+  for (let r = 1, R = pickRadius(); r <= R; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
     const x = cx + dx, y = cy + dy;
     if (x >= 0 && y >= 0 && x < W && y < H && world.occ[y * W + x]) return world.occ[y * W + x];
   }
@@ -1883,9 +1890,25 @@ function updateTracker() {
   if (!selected) { el.style.display = 'none'; return; }
   $('#trackerBody').innerHTML = `<div style="font-family:var(--px);font-size:7px;color:var(--gold);margin-bottom:4px">TRACKING</div>` + animalHTML(selected);
   el.style.display = 'block';
+  const b = $('#btnFollow');
+  b.textContent = follow ? 'FOLLOWING' : 'FOLLOW';
+  b.classList.toggle('on', follow);
+  b.setAttribute('aria-pressed', follow ? 'true' : 'false');
 }
-$('#tracker .x').addEventListener('pointerdown', e => { e.preventDefault(); selected = null; updateTracker(); });
-$('#tracker .x').addEventListener('click', () => { selected = null; updateTracker(); canvas.focus(); });
+// Follow the tracked animal with the camera (only while it is alive). Turning it on centres at once.
+function setFollow(on) {
+  follow = !!(on && selected && selected.alive);
+  if (follow) CAM.centerOn(cam, selected.x, selected.y);
+  updateTracker();
+}
+function toggleFollow() {
+  if (!follow && !(selected && selected.alive)) { toast('CLICK AN ANIMAL FIRST TO TRACK IT'); return; }
+  setFollow(!follow);
+}
+$('#tracker .x').addEventListener('pointerdown', e => { e.preventDefault(); selected = null; follow = false; updateTracker(); });
+$('#tracker .x').addEventListener('click', () => { selected = null; follow = false; updateTracker(); canvas.focus(); });
+$('#btnFollow').addEventListener('pointerdown', e => e.preventDefault());   // keep the map's keyboard focus
+$('#btnFollow').addEventListener('click', toggleFollow);
 
 // ---------------- controls ----------------
 function setTool(t) {
@@ -2066,6 +2089,7 @@ function actAt(c, shift) {
     } else { toast("NO ROOM HERE. TRY OPEN GRASSLAND"); Sfx.play('click'); }
   } else {
     const a = animalAt(c.x, c.y);
+    if ((a || null) !== selected) follow = false;
     selected = a || null;
     updateTracker(); updateTooltip();
   }
@@ -2098,7 +2122,7 @@ document.addEventListener('keydown', e => {
   if (k === ' ' && e.target !== document.body && e.target !== canvas && e.target.matches(':focus-visible')) return; // let Space press focused controls
   if (k === ' ') { e.preventDefault(); Sfx.init(); setRunning(!running); }
   else if (k >= '1' && k <= '5') setTool(+k - 1);
-  else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; updateTracker(); } }
+  else if (k === '0' || k === 'Escape') { setTool(-1); if (k === 'Escape') { selected = null; follow = false; updateTracker(); } }
   else if (k === '+' || k === '=') setSpeed(speedIdx + 1);
   else if (k === '-' || k === '_') setSpeed(speedIdx - 1);
   else if (k === 'v' || k === 'V') setView(viewMode + 1);
@@ -2107,6 +2131,7 @@ document.addEventListener('keydown', e => {
   else if (k === 'h' || k === 'H' || k === '?') openHelp();
   else if (k === '.') { setRunning(false); GOL.step(world); }
   else if (k.length === 1 && 'wasdWASD'.includes(k)) { heldPan.add(k.toLowerCase()); panFast = e.shiftKey; }
+  else if (k === 'f' || k === 'F') toggleFollow();
   else if (k === 'z' || k === 'Z') zoomTo(cam.zi + 1);
   else if (k === 'x' || k === 'X') zoomTo(cam.zi - 1);
 });
@@ -2176,7 +2201,7 @@ function newWorld(preset, isDemo) {
   world.seasons = $('#seasons').checked;
   prepWorldGfx();
   resetCamera();
-  particles = []; selected = null; hover = null;
+  particles = []; selected = null; follow = false; hover = null;
   notesShown = new Set(); objDone = {}; goalTrack = {}; milestones = {}; everHadPred = false;
   lastYearSnap = { births: 0, kills: 0, fights: 0, counts: world.counts.slice() };
   for (let s = 0; s < 5; s++) for (const m of [100, 500, 1000]) if (world.counts[s] >= m) milestones[s + ':' + m] = true;
@@ -2267,6 +2292,10 @@ function updateCamera(dt, overlay) {
     const dx = (heldPan.has('d') ? 1 : 0) - (heldPan.has('a') ? 1 : 0), dy = (heldPan.has('s') ? 1 : 0) - (heldPan.has('w') ? 1 : 0);
     if (dx || dy) { CAM.panBy(cam, dx * v, dy * v); follow = false; }
   }
+  if (follow) {
+    if (!selected || !selected.alive) setFollow(false);
+    else CAM.centerOn(cam, selected.x, selected.y);
+  }
   // When the view moved, keep the cursor honest: under the mouse, or (keyboard) pulled into view.
   const r = CAM.srcRect(cam), key = r.x + ',' + r.y + ',' + cam.zi;
   if (key === lastCamKey) return;
@@ -2320,6 +2349,7 @@ if (DEBUG) window.golDebug = {
   CAM, cam, resetCamera, renderMs: 0,
   get world() { return world; }, get hover() { return hover; }, get selected() { return selected; },
   get follow() { return follow; }, get tool() { return tool; }, get running() { return running; },
+  setSelected(a) { selected = a; updateTracker(); }, setFollow, pickRadius,
 };
 
 buildSidebar();

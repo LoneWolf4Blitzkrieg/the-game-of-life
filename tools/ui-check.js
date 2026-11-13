@@ -337,6 +337,73 @@
     await sleep(300);
   });
 
+  // ---------- group: follow (Task 8) ----------
+  const followText = () => (document.querySelector('#btnFollow') || {}).textContent;
+  const inView = a => { const v = CAM.visibleTiles(D.cam); return a.x >= v.x0 && a.x <= v.x1 && a.y >= v.y0 && a.y <= v.y1; };
+  // Track a living lion by clicking it with the inspect tool.
+  async function trackLion() {
+    const a = D.world.animals.find(a => a.alive && a.sp === 3);
+    check(a, 'no living lion');
+    CAM.centerOn(D.cam, a.x, a.y);
+    await frames(1);
+    key('0');
+    const p = tileCenter(a.x, a.y);
+    ptr('pointerdown', p.x, p.y); ptr('pointerup', p.x, p.y);
+    check(D.selected === a, 'click did not track the lion');
+    return a;
+  }
+  add('follow', 'F without a tracked animal shows a hint', async () => {
+    D.setSelected(null);
+    key('f');
+    check(D.follow === false, 'follow turned on with nothing tracked');
+    const t = document.querySelector('#toast').textContent;
+    check(t.includes('CLICK AN ANIMAL'), 'toast: ' + t);
+  });
+  add('follow', 'F follows the tracked animal', async () => {
+    const a = await trackLion();
+    key('f');
+    check(D.follow === true, 'F did not start following');
+    for (let i = 0; i < 20; i++) key('.');
+    await frames(5);
+    check(a.alive, 'the lion died during the check (rerun)');
+    check(inView(a), `lion at ${a.x},${a.y} not in view ${JSON.stringify(CAM.visibleTiles(D.cam))}`);
+    check(D.follow === true, 'follow stopped');
+    check(followText() === 'FOLLOWING', 'button text ' + followText());
+  });
+  add('follow', 'dragging stops following', async () => {
+    await trackLion();
+    key('f');
+    check(D.follow === true, 'F did not start following');
+    ptr('pointerdown', 480, 300);
+    ptr('pointermove', 480 + scr(20), 300); ptr('pointermove', 480 + scr(40), 300);
+    await frames(1);
+    const f = D.follow;
+    ptr('pointerup', 480 + scr(40), 300);
+    check(f === false, 'still following after a drag');
+    await sleep(300);
+    check(followText() === 'FOLLOW', 'button text ' + followText());
+  });
+  add('follow', 'death stops following', async () => {
+    const errs = [], onErr = e => errs.push(e.message);
+    window.addEventListener('error', onErr);
+    const orig = console.error; console.error = (...a) => { errs.push(a.join(' ')); orig(...a); };
+    try {
+      const a = D.world.animals.find(a => a.alive && a.sp === 3), twin = Object.assign({}, a);
+      D.setSelected(twin); D.setFollow(true);
+      check(D.follow === true, 'follow did not start');
+      twin.alive = false;
+      await frames(2);
+      check(D.follow === false, 'still following a dead animal');
+      await sleep(300);
+    } finally { window.removeEventListener('error', onErr); console.error = orig; }
+    check(errs.length === 0, 'errors: ' + errs.join(' | '));
+  });
+  add('follow', 'whole-world picking is wider', async () => {
+    check(D.pickRadius() === 1, 'radius at 1x ' + D.pickRadius());
+    key('x');
+    check(D.cam.zi === 0 && D.pickRadius() === 2, 'radius at whole world ' + D.pickRadius());
+  });
+
   // ---------- runner ----------
   window.uiCheck = async group => {
     await setup();
