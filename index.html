@@ -1101,13 +1101,16 @@ const GOL = (() => {
     const S = SNAP, A = w.animals, n = A.length, occ = S.occ, due = S.due;
     if (snapCoverOf !== w) { S.cover.set(w.cover); occ.fill(-1); snapCoverOf = w; }
     else for (let k = 0; k < snapN; k++) { const c = S.y[k] * W + S.x[k]; if (occ[c] === k) occ[c] = -1; }   // clear only yesterday's cells
-    S.chunks.set(w.chunks);
+    const ch = w.chunks;   // where each species is (coarse grid), counted in the same pass
+    ch.fill(0);
     let d = 0;
     for (let k = 0; k < n; k++) {
       const a = A[k];
       a._i = k; occ[a.y * W + a.x] = k; snapRow(S, a, k, true);
+      ch[a.sp * CN + ((a.y / CH) | 0) * CW + ((a.x / CH) | 0)]++;
       if (a.think <= 1) due[d++] = k;   // update() decrements first
     }
+    S.chunks.set(ch);
     for (let k = 0; k < n; k++) { const m = A[k].mom; S.mom[k] = m && m.alive && A[m._i] === m ? m._i : -1; }
     S.meta[0] = w.tick; S.meta[1] = w.seed | 0; S.meta[2] = ++thinkGen;
     snapN = n;
@@ -1252,8 +1255,6 @@ const GOL = (() => {
     const si = seasonInfo(w);
     const A = w.animals, ch = w.chunks;
     if (thinker && thinker.prewake && A.length > 200) thinker.prewake();   // helpers wake while we build the snapshot
-    ch.fill(0);
-    for (const a of A) ch[a.sp * CN + ((a.y / CH) | 0) * CW + ((a.x / CH) | 0)]++;
     for (let i = A.length - 1; i > 0; i--) { const j = (w.rand() * (i + 1)) | 0; const t = A[i]; A[i] = A[j]; A[j] = t; }
     const p0 = prof.on ? performance.now() : 0;
     const nd = snapshot(w);
@@ -1263,11 +1264,19 @@ const GOL = (() => {
     const n = A.length;
     for (let k = 0; k < n; k++) { const a = A[k]; if (a.alive) update(w, a, k); }
     if (prof.on) { const p3 = performance.now(); prof.days++; prof.snap += p1 - p0; prof.think += p2 - p1; prof.loop += p3 - p2; prof.pre += nd; }
+    // Drop the dead and recount the living in one pass.
+    const c = w.counts, ml = w.males, jv = w.juveniles;
+    for (let s = 0; s < 5; s++) { c[s] = 0; ml[s] = 0; jv[s] = 0; }
     let wi = 0;
-    for (let k = 0; k < A.length; k++) if (A[k].alive) A[wi++] = A[k];
+    for (let k = 0; k < A.length; k++) {
+      const a = A[k];
+      if (!a.alive) continue;
+      A[wi++] = a;
+      c[a.sp]++;
+      if (a.male) ml[a.sp]++;
+      if (a.age < SPECIES[a.sp].mature) jv[a.sp]++;
+    }
     A.length = wi;
-
-    recount(w);
     for (let s = 0; s < 5; s++) {
       if (w.prevCounts[s] > 0 && w.counts[s] === 0) { w.extinctAt[s] = w.tick; emit(w, { t: 'extinct', sp: s }); }
       w.prevCounts[s] = w.counts[s];
@@ -1440,7 +1449,7 @@ const Pool = (() => {
   const ok = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true &&
     typeof Atomics !== 'undefined' && typeof Worker !== 'undefined' && cores >= 2;
   if (!ok) return { available: false, cores, max: 0, threads: 1, setThreads() {} };
-  const MAX = Math.max(1, Math.min(7, cores - 1));   // helpers: leave room for the master
+  const MAX = Math.max(1, Math.min(15, cores - 1));   // helpers: one per remaining CPU thread (up to 16 threads)
   const C_ACTIVE = 5, C_WAKE = 6, C_READY = 7;
   const src = document.getElementById('think-core').textContent + `
 onmessage = e => {
