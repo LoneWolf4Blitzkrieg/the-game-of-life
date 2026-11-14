@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LoneWolf4Blitzkrieg. Part of The Game of Life; see LICENSE.
 // Parameter sweep: node tools/sweep.js '<json array of override sets>' [years] [seeds]
 // Each override set: { "lion": {"metab":0.6}, "cheetah": {...} }
 const fs = require('fs'), path = require('path');

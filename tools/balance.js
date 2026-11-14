@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LoneWolf4Blitzkrieg. Part of The Game of Life; see LICENSE.
 // Headless balance harness: extracts the sim core from index.html and runs it.
 // Usage: node tools/balance.js [years=12] [seeds=5] [preset=balanced]
 const fs = require('fs'), path = require('path');

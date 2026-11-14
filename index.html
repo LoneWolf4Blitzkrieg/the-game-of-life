@@ -1,23 +1,45 @@
 <!doctype html>
+<!--
+  The Game of Life: an educational predator-prey ecosystem game in pixels.
+  Copyright (C) 2026 LoneWolf4Blitzkrieg
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+  SPDX-License-Identifier: GPL-3.0-or-later
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Game of Life</title>
 <meta name="description" content="An educational 16-bit predator–prey ecosystem simulation.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b0d1c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" crossorigin="anonymous">
 <script>
-// Multicore play needs SharedArrayBuffer, which needs "cross-origin isolation". GitHub Pages can't
-// send the headers for that, so coi-sw.js (a tiny service worker) adds them. Register it and
-// reload once; if that isn't possible (opened from disk, old browser), the game runs on one thread.
+// coi-sw.js (a small service worker) keeps a copy of the game for offline play and adds the
+// "cross-origin isolation" headers that multicore needs (GitHub Pages can't send them). Register
+// it on every visit; reload once if multicore still needs switching on. Opened straight from a
+// file, none of this is possible and the game runs on one thread (see README: Play offline).
 (() => {
-  if (window.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
+  if (!window.isSecureContext || !('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
   let tried = false;
   try { tried = sessionStorage.getItem('gol.coi') === '1'; sessionStorage.setItem('gol.coi', '1'); } catch (e) { tried = true; }
   navigator.serviceWorker.register('coi-sw.js').then(() => navigator.serviceWorker.ready).then(() => {
-    if (!tried) location.reload();
+    if (!window.crossOriginIsolated && !tried) location.reload();
   }).catch(() => { /* single-threaded */ });
 })();
 </script>
@@ -317,7 +339,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
         <div class="row"><label for="rain">Rainfall <span id="rainVal">100%</span></label><input type="range" id="rain" min="30" max="160" value="100" autocomplete="off"></div>
         <div class="row"><label for="seasons">Wet &amp; dry seasons</label><input type="checkbox" id="seasons" checked autocomplete="off"></div>
         <div class="row"><label for="autoPredict">Prediction prompts</label><input type="checkbox" id="autoPredict" checked autocomplete="off"></div>
-        <div class="row" title="Shares the animals' thinking across your computer's CPU cores"><label for="multicore">Multicore <span id="cpuText" style="color:var(--teal)"></span></label><input type="checkbox" id="multicore" checked autocomplete="off"></div>
+        <div class="row" title="Runs each simulated day across your computer's CPU cores"><label for="multicore">Multicore <span id="cpuText" style="color:var(--teal)"></span></label><input type="checkbox" id="multicore" checked autocomplete="off"></div>
         <div class="row"><label>Average grass</label><span class="bar" style="width:150px"><i id="grassBar" style="width:50%;background:#6cbf4a"></i></span></div>
       </div>
     </aside>
@@ -440,6 +462,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>M</kbd><span>Sound on / off</span>
     </div>
     <p class="hint" style="text-align:left">Prey are cool colours (blue buffalo, teal gazelles, white hares). Predators are warm colours (gold lions, red cheetahs). Babies are drawn smaller. Grass changes from green to straw to bare earth as it is eaten and as the seasons change. Time runs fast here: one game year is 360 days, but lifespans and pregnancies are shortened and not to real scale.</p>
+    <p class="hint" style="text-align:left">Free software under the <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener" style="color:var(--teal)">GNU General Public License v3</a> (or later): you may share and change it. Source: <a href="https://github.com/LoneWolf4Blitzkrieg/the-game-of-life" target="_blank" rel="noopener" style="color:var(--teal)">GitHub</a>.</p>
     <button class="btn gold" id="btnCloseHelp" style="margin-top:10px">GOT IT</button>
   </div>
 </div>
@@ -2803,7 +2826,11 @@ function updateCpuUI() {
   const box = $('#multicore');
   if (!Pool.available || Pool.threads === 1 && Pool.lastError) {
     box.checked = false; box.disabled = true;
-    $('#cpuText').textContent = Pool.lastError ? '(off: ' + Pool.lastError + ')' : '(1 thread: needs the online version)';
+    $('#cpuText').textContent = Pool.lastError ? '(off: ' + Pool.lastError + ')'
+      : location.protocol === 'file:' ? '(1 thread: use a Play Offline launcher)' : '(1 thread)';
+    $('#cpuText').parentElement.parentElement.title = location.protocol === 'file:'
+      ? 'Opened straight from a file, browsers block multicore. For multicore without internet, start the game with "Play Offline (Windows).exe" or play-offline.sh from the game folder, or install it from the website.'
+      : 'Multicore needs a browser that supports shared memory (cross-origin isolation).';
   } else {
     box.disabled = false;
     $('#cpuText').textContent = box.checked ? `(${Pool.threads} threads)` : '(1 thread)';

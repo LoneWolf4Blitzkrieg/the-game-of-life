@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LoneWolf4Blitzkrieg. Part of The Game of Life; see LICENSE.
 // In-browser UI checks for the camera, zoom, pointer, keyboard, minimap and follow features.
 // Serve the folder (e.g. python3 -m http.server), open index.html?debug, then run in the console:
 //   await fetch('tools/ui-check.js').then(r => r.text()).then(t => (0, eval)(t)); await uiCheck();
