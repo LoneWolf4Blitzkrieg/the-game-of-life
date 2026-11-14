@@ -16,7 +16,7 @@ All three ways give the same game; the first two keep **multicore**:
 
 1. **Install it from the website (easiest).** Visit the game online once. It then keeps a copy on the device and opens without internet, multicore included. In Chrome or Edge you can also choose **Install app** (in the address bar or menu) to get a desktop icon.
 2. **Downloaded copy with a launcher (USB stick, ZIP, school network share).** Download the repository as a ZIP, unzip it, then double-click:
-   - **Windows:** `Play Offline (Windows).bat` (uses built-in PowerShell, nothing to install).
+   - **Windows:** `Play Offline (Windows).exe`. It's a tiny standalone program (no install, no PowerShell, Windows 7 or later, 32- and 64-bit). Windows SmartScreen may warn the first time because it isn't code-signed: choose **More info → Run anyway**. Its source is [`offline/launcher.c`](offline/launcher.c); rebuild it on Linux with `offline/build-windows.sh`.
    - **macOS:** `Play Offline (Mac).command` (needs Python 3; the first time, right-click → Open).
    - **Linux:** `./play-offline.sh` (needs Python 3). To add it to your applications menu (under Games, with its icon), run `offline/install-linux-app.sh` once; remove it with `offline/install-linux-app.sh --uninstall`.
 

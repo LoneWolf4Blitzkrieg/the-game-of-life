@@ -2714,7 +2714,7 @@ function updateCpuUI() {
     $('#cpuText').textContent = Pool.lastError ? '(off: ' + Pool.lastError + ')'
       : location.protocol === 'file:' ? '(1 thread: use a Play Offline launcher)' : '(1 thread)';
     $('#cpuText').parentElement.parentElement.title = location.protocol === 'file:'
-      ? 'Opened straight from a file, browsers block multicore. For multicore without internet, start the game with "Play Offline (Windows).bat" or play-offline.sh from the game folder, or install it from the website.'
+      ? 'Opened straight from a file, browsers block multicore. For multicore without internet, start the game with "Play Offline (Windows).exe" or play-offline.sh from the game folder, or install it from the website.'
       : 'Multicore needs a browser that supports shared memory (cross-origin isolation).';
   } else {
     box.disabled = false;
