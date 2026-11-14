@@ -43,12 +43,14 @@ Every birth needs a male and a female of the same species. Young predators follo
 
 Food chains and energy pyramids · Lotka–Volterra predator–prey cycles · r- vs K-selection · carrying capacity and seasons · competition, intraguild predation and niche partitioning · prey switching · sexual reproduction, small populations and the Allee effect · trophic cascades · the Shannon biodiversity index.
 
-## 16-bit or 18-bit colour
+## 16-bit or 18-bit look
 
-Press **C** (or the **COLOR** button) to switch the look:
+Press **C** (or the **COLOR** button) to switch:
 
-- **16-bit:** authentic 16-bit-console colour, 5 bits per channel (32,768 colours), with flat two-step shading.
-- **18-bit** (default): 6 bits per channel (262,144 colours), spent on smoother art: twice as many grass shades for seasonal fades, three water depths with soft sparkles, three-step sprite shading with light from the upper left, and soft-edged ground shadows.
+- **16-bit:** authentic 16-bit-console look: 5 bits per colour channel (32,768 colours), 6 x 6-pixel tiles, flat two-step shading.
+- **18-bit** (default): 6 bits per channel (262,144 colours) **and twice the pixel density**: 12 x 12-pixel tiles on a 1920 x 1200 map. Sprites are upscaled with Scale2x (rounded outlines instead of stair-steps) and shaded at the higher resolution, with eye catchlights; grass and water are drawn natively at 12 pixels (finer blades, wave lines, three water depths with pinpoint sparkles); twice as many grass shades for smoother seasons; soft-edged ground shadows.
+
+On a typical 1080p screen the map is shown smaller than 1920 pixels, so the game scales it down smoothly; the full detail shows when you zoom in (2x/3x) or on a high-resolution screen. 18-bit drawing costs about 2.5x the time of 16-bit (on a desktop: about 4 ms per frame at 1x, 10 ms at whole-world zoom), so 16-bit is the lighter choice for very old PCs.
 
 ![The same lake shore at 16-bit and 18-bit](docs/colour-depth-16-vs-18.png)
 
