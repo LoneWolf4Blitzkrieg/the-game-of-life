@@ -281,6 +281,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <button class="btn" id="btnStep" title="Advance one day (.)">STEP</button>
       <button class="btn" id="btnSpeed" title="Change speed (+ / -)">SPEED 1×</button>
       <button class="btn" id="btnView" title="Cycle view mode (V)">VIEW: NORMAL</button>
+      <button class="btn" id="btnDepth" title="Switch the look (C): 16-bit (32,768 colours, 6-pixel tiles) or 18-bit (262,144 colours, 12-pixel tiles, smoother shading)">COLOR: 18-BIT</button>
       <button class="btn" id="btnSound" title="Toggle sound (M)">♪ ON</button>
       <button class="btn" id="btnNew" title="New world (N)">NEW WORLD</button>
       <button class="btn" id="btnHelp" title="Help (H)">?</button>
@@ -455,6 +456,7 @@ input[type=checkbox]{accent-color:var(--gold);width:18px;height:18px}
       <kbd>SPACE</kbd><span>Pause / resume</span>
       <kbd>.</kbd><span>Step one day while paused</span>
       <kbd>+ / −</kbd><span>Faster / slower</span>
+      <kbd>C</kbd><span>Switch the look (or the COLOR button): 16-bit (32,768 colours, 6-pixel tiles) or 18-bit (262,144 colours, 12-pixel tiles)</span>
       <kbd>V</kbd><span>View: Normal → Sex (♂ blue, ♀ pink) → Energy (red = starving)</span>
       <kbd>N</kbd><span>New world</span>
       <kbd>M</kbd><span>Sound on / off</span>
@@ -1469,8 +1471,15 @@ if (typeof module !== 'undefined') module.exports = CAM;
 (() => {
 'use strict';
 const { W, H, SPECIES, YEAR, T_GRASS, T_WATER, T_TREE, T_ROCK } = GOL;
-const CELL = 6, PW = W * CELL, PH = H * CELL;   // PW x PH: the whole world in world px
-const VIEW_W = 960, VIEW_H = 600;                 // the map canvas, in canvas px
+// Pixel density: each tile is CELL x CELL world px. 16-bit look: 6 px tiles on a 960 x 600 canvas.
+// 18-bit look: 12 px tiles on a 1920 x 1200 canvas (same framing, 4x the detail). See setDepth().
+const BASE = 6;   // particles and other effects are defined in 6-px units and scaled by DENS
+let DENS = 1, CELL = 6, TT = 36, PW = W * CELL, PH = H * CELL;   // PW x PH: the whole world in world px
+let VIEW_W = 960, VIEW_H = 600;                                 // the map canvas, in canvas px
+function setDensity(d) {
+  DENS = d; CELL = BASE * d; TT = CELL * CELL; PW = W * CELL; PH = H * CELL;
+  VIEW_W = 960 * d; VIEW_H = 600 * d;
+}
 const DEBUG = /[?&]debug\b/.test(location.search);
 const $ = s => document.querySelector(s);
 const storage = {
@@ -1602,7 +1611,19 @@ const refOf = slot => new AnimalRef(world, slot);
 // ---------------- colour helpers ----------------
 const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const c8 = v => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
-const pack = c => ((255 << 24) | (c8(c[2]) << 16) | (c8(c[1]) << 8) | c8(c[0])) >>> 0;
+// Colour depth. The 16-bit consoles drew from 15-bit colour (5 bits per channel, 32,768 colours).
+// The 18-bit look uses 6 bits per channel (262,144 colours) and spends them on smoother shading.
+// Every colour the renderer makes goes through pack(), which rounds it to the current depth.
+let DEPTH = storage.get('depth', 18) === 16 ? 16 : 18;
+setDensity(DEPTH === 18 ? 2 : 1);
+const QUANT = { 16: new Uint8Array(256), 18: new Uint8Array(256) };
+for (let v = 0; v < 256; v++) {
+  QUANT[16][v] = Math.round(Math.round(v * 31 / 255) * 255 / 31);
+  QUANT[18][v] = Math.round(Math.round(v * 63 / 255) * 255 / 63);
+}
+let Q = QUANT[DEPTH];
+const HQ = () => DEPTH === 18;
+const pack = c => ((255 << 24) | (Q[c8(c[2])] << 16) | (Q[c8(c[1])] << 8) | Q[c8(c[0])]) >>> 0;
 const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const mul = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
 const dimC = c => { const L = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11; return mul(mix(c, [L, L, L], 0.6), 0.42); };
@@ -1614,52 +1635,84 @@ function hash3(x, y, z) {
 const unpackCss = u => `rgb(${u & 255},${(u >>> 8) & 255},${(u >>> 16) & 255})`;
 
 // ---------------- terrain tiles ----------------
-const GL = 16, DL = 8, VAR = 4;
-const grassTiles = new Uint32Array(GL * DL * VAR * 2 * 36);
-const gIdx = (l, d, v, dim) => (((l * DL + d) * VAR + v) * 2 + dim) * 36;
-(function buildGrass() {
-  const wet = hex('#3c7a35'), dry = hex('#a8984a'), soilW = hex('#5a452f'), soilD = hex('#7a6141');
+// Scale2x (EPX): doubles a character grid, rounding diagonal edges instead of making stairs.
+function scale2x(g) {
+  const h = g.length, w = g[0].length, at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h) ? '.' : g[y][x];
+  const out = Array.from({ length: h * 2 }, () => Array(w * 2).fill('.'));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const P = g[y][x], A = at(x, y - 1), B = at(x + 1, y), C = at(x - 1, y), D = at(x, y + 1);
+    out[2 * y][2 * x] = C === A && C !== D && A !== B ? A : P;
+    out[2 * y][2 * x + 1] = A === B && A !== C && B !== D ? B : P;
+    out[2 * y + 1][2 * x] = D === C && D !== B && C !== A ? C : P;
+    out[2 * y + 1][2 * x + 1] = B === D && B !== A && D !== C ? D : P;
+  }
+  return out;
+}
+const atDensity = rows => { let g = rows.map(r => r.split('')); for (let d = 1; d < DENS; d *= 2) g = scale2x(g); return g; };
+
+// Grass: 16 growth levels x 8 seasonal shades at 16-bit; 32 x 16 at 18-bit (smoother fades).
+const GLMAX = 32, DLMAX = 16, VAR = 4;
+let GL = 16, DL = 8;
+const TMAX = 12, TTMAX = TMAX * TMAX;
+const grassTiles = new Uint32Array(GLMAX * DLMAX * VAR * 2 * TTMAX);
+const gIdx = (l, d, v, dim) => (((l * DL + d) * VAR + v) * 2 + dim) * TT;
+function buildGrass() {
+  const hq = HQ();
+  GL = hq ? 32 : 16; DL = hq ? 16 : 8;
+  const wet = hex('#3c7a35'), dry = hex('#a8984a'), soilW = hex('#5a452f'), soilD = hex('#7a6141'), tip = [228, 236, 160];
   for (let l = 0; l < GL; l++) for (let d = 0; d < DL; d++) for (let v = 0; v < VAR; v++) for (let dim = 0; dim < 2; dim++) {
     const gv = l / (GL - 1), dv = d / (DL - 1);
     const base = mix(mix(soilW, soilD, dv), mix(wet, dry, dv), Math.pow(gv, 0.65));
     const o = gIdx(l, d, v, dim);
-    for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
-      let c = mul(base, 0.93 + hash3(px, py, v * 7 + 1) * 0.14);
-      const blade = gv > 0.3 && py < 5 && hash3(px, py, v * 13 + 5) < gv * 0.3;
-      const under = gv > 0.3 && py > 0 && hash3(px, py - 1, v * 13 + 5) < gv * 0.3;
-      if (blade) c = mul(c, 1.2); else if (under) c = mul(c, 0.8);
-      if (gv < 0.25 && hash3(px, py, v * 17 + 9) < 0.07) c = mul(c, 1.28);
-      grassTiles[o + py * 6 + px] = pack(dim ? dimC(c) : c);
+    const bladeAt = (x, y) => gv > 0.3 && y >= 0 && y < CELL - 1 && hash3(x, y, v * 13 + 5) < gv * 0.3;
+    for (let py = 0; py < CELL; py++) for (let px = 0; px < CELL; px++) {
+      let c = mul(base, hq ? 0.95 + hash3(px, py, v * 7 + 1) * 0.1 : 0.93 + hash3(px, py, v * 7 + 1) * 0.14);
+      if (bladeAt(px, py)) c = hq ? mix(mul(c, 1.18), tip, 0.08 + 0.06 * gv) : mul(c, 1.2);   // sunlit blade tip
+      else if (bladeAt(px, py - 1)) c = mul(c, hq ? 0.84 : 0.8);                              // its shadow
+      else if (hq && bladeAt(px, py - 2)) c = mul(c, 0.94);                                  // soft shadow below
+      if (gv < 0.25 && hash3(px, py, v * 17 + 9) < 0.07) c = mul(c, 1.28);                  // pebbles on bare soil
+      grassTiles[o + py * CELL + px] = pack(dim ? dimC(c) : c);
     }
   }
-})();
-const waterTiles = new Uint32Array(4 * 2 * VAR * 2 * 36);
-const wIdx = (f, deep, v, dim) => (((f * 2 + deep) * VAR + v) * 2 + dim) * 36;
-(function buildWater() {
-  const deepC = hex('#1a3874'), shal = hex('#2b66a6'), foam = hex('#a8dcff');
-  for (let f = 0; f < 4; f++) for (let dp = 0; dp < 2; dp++) for (let v = 0; v < VAR; v++) for (let dim = 0; dim < 2; dim++) {
+}
+// Water: shore and deep at 16-bit; shore, mid and deep with soft sparkles at 18-bit. 4 animation frames.
+const waterTiles = new Uint32Array(4 * 3 * VAR * 2 * TTMAX);
+const wIdx = (f, dp, v, dim) => (((f * 3 + dp) * VAR + v) * 2 + dim) * TT;
+function buildWater() {
+  const hq = HQ();
+  const shades = hq ? [hex('#2d6aaa'), hex('#22508e'), hex('#193670')] : [hex('#2b66a6'), hex('#1a3874'), hex('#1a3874')];
+  const foam = hex('#a8dcff');
+  for (let f = 0; f < 4; f++) for (let dp = 0; dp < 3; dp++) for (let v = 0; v < VAR; v++) for (let dim = 0; dim < 2; dim++) {
     const o = wIdx(f, dp, v, dim);
-    for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
-      let c = mul(dp ? deepC : shal, 0.95 + hash3(px, py, v + 50) * 0.1);
-      if ((px + py * 2 + f * 2 + v * 3) % 11 === 0) c = mix(c, foam, 0.3);
-      if (hash3(px, py, v * 31 + f) < 0.03) c = mix(c, foam, 0.85);
-      waterTiles[o + py * 6 + px] = pack(dim ? dimC(c) : c);
+    const sparkP = 0.03 / (DENS * DENS);   // same sparkles per tile at any density
+    const spark = (x, y) => x >= 0 && y >= 0 && x < CELL && y < CELL && hash3(x, y, v * 31 + f) < sparkP;
+    for (let py = 0; py < CELL; py++) for (let px = 0; px < CELL; px++) {
+      let c = mul(shades[dp], hq ? 0.96 + hash3(px, py, v + 50) * 0.08 : 0.95 + hash3(px, py, v + 50) * 0.1);
+      if ((px + py * 2 + f * 2 * DENS + v * 3) % (11 * DENS) === 0) c = mix(c, foam, hq ? 0.22 + 0.08 * (2 - dp) / 2 : 0.3);
+      if (spark(px, py)) c = mix(c, foam, 0.85);
+      else if (hq && (spark(px - 1, py) || spark(px + 1, py) || spark(px, py - 1) || spark(px, py + 1))) c = mix(c, foam, 0.25);   // sparkle halo
+      waterTiles[o + py * CELL + px] = pack(dim ? dimC(c) : c);
     }
   }
-})();
+}
 function maskTile(rows, pal, bg) {
-  const out = new Uint32Array(72);
-  for (let dim = 0; dim < 2; dim++) for (let py = 0; py < 6; py++) for (let px = 0; px < 6; px++) {
-    const ch = rows[py][px];
+  const g = atDensity(rows), out = new Uint32Array(TT * 2);
+  for (let dim = 0; dim < 2; dim++) for (let py = 0; py < CELL; py++) for (let px = 0; px < CELL; px++) {
+    const ch = g[py][px];
     let c = ch === '.' ? mul(bg, 0.94 + hash3(px, py, 77) * 0.12) : hex(pal[ch]);
-    out[dim * 36 + py * 6 + px] = pack(dim ? dimC(c) : c);
+    if (ch !== '.' && DENS > 1 && py > 0 && g[py - 1][px] === '.') c = mix(c, [255, 255, 255], 0.1);   // lit top edge
+    out[dim * TT + py * CELL + px] = pack(dim ? dimC(c) : c);
   }
   return out;
 }
-const treeTile = maskTile(['.hhhh.', 'hhcchh', 'cccccc', '..t...', '..t...', '.sss..'],
-  { h: '#5e9a3e', c: '#2f5e2a', t: '#5a3a22', s: '#3f3a22' }, hex('#6a6a38'));
-const rockTile = maskTile(['......', '..hh..', '.hrrr.', 'hrrrrs', 'rrrrss', '.ssss.'],
-  { h: '#b8b2a4', r: '#878275', s: '#55524a' }, hex('#6e6a3c'));
+let treeTile, rockTile;
+function buildProps() {
+  const hq = HQ();   // 18-bit adds a mid shade to the canopy and the boulder
+  treeTile = maskTile(hq ? ['.hhhh.', 'hmmmmh', 'cmccmc', '..t...', '..t...', '.sss..'] : ['.hhhh.', 'hhcchh', 'cccccc', '..t...', '..t...', '.sss..'],
+    { h: '#5e9a3e', m: '#467d36', c: '#2f5e2a', t: '#5a3a22', s: '#3f3a22' }, hex('#6a6a38'));
+  rockTile = maskTile(hq ? ['......', '..hh..', '.hmrr.', 'hmrrrs', 'rrrrss', '.ssss.'] : ['......', '..hh..', '.hrrr.', 'hrrrrs', 'rrrrss', '.ssss.'],
+    { h: '#b8b2a4', m: '#a09a8c', r: '#878275', s: '#55524a' }, hex('#6e6a3c'));
+}
 
 // ---------------- sprites ----------------
 const MASKS = [
@@ -1684,54 +1737,77 @@ const PAL = [
 const SEX_COL = ['#ff7ac8', '#5aa9ff']; // female, male
 const ENERGY_COL = ['#ff2f2f', '#ff5a2a', '#ff8a24', '#ffb31f', '#ffd23f', '#c8e83a', '#8cf04a', '#4dff6a'];
 const NVAR = 10; // 0 normal, 1 sex, 2..9 energy
-const sprites = new Uint32Array(5 * 2 * 2 * 2 * NVAR * 36);
-const sIdx = (sp, male, left, juv, v) => (((((sp * 2 + male) * 2 + left) * 2 + juv) * NVAR) + v) * 36;
+const sprites = new Uint32Array(5 * 2 * 2 * 2 * NVAR * TTMAX);
+const sIdx = (sp, male, left, juv, v) => (((((sp * 2 + male) * 2 + left) * 2 + juv) * NVAR) + v) * TT;
 function buildSprite(rows, pal, flip, juv) {
   let g = rows.map(r => r.split(''));
-  if (juv) {
+  if (juv) {   // young animals: the 6 x 6 art shrunk to 4 x 4, standing at the bottom
     const s = Array.from({ length: 6 }, () => Array(6).fill('.'));
     for (let ty = 0; ty < 4; ty++) for (let tx = 0; tx < 4; tx++) s[ty + 2][tx + 1] = g[Math.round(ty * 5 / 3)][Math.round(tx * 5 / 3)];
     g = s;
   }
-  const out = new Uint32Array(36);
-  const filled = (x, y) => x >= 0 && y >= 0 && x < 6 && y < 6 && g[y][x] !== '.';
-  for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++) {
-    const ch = g[y][x], ox = flip ? 5 - x : x;
+  for (let d = 1; d < DENS; d *= 2) g = scale2x(g);   // higher density: smoother outlines
+  const T = CELL, out = new Uint32Array(TT);
+  const filled = (x, y) => x >= 0 && y >= 0 && x < T && y < T && g[y][x] !== '.';
+  for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
+    const ch = g[y][x], ox = flip ? T - 1 - x : x;
     if (ch === '.') {
-      if (y >= 4) { let col = false; for (let yy = 0; yy < y; yy++) if (g[yy][x] !== '.') col = true; if (col) out[y * 6 + ox] = 1; }
+      if (y >= T * 2 / 3) { let col = false; for (let yy = 0; yy < y; yy++) if (g[yy][x] !== '.') col = true; if (col) out[y * T + ox] = 1; }
       continue;
     }
     let c = hex(pal[ch]);
     if (ch !== 'e' && ch !== 'd') {
       if (!filled(x, y - 1)) c = mix(c, [255, 255, 255], 0.28);
       else if (!filled(x, y + 1)) c = mul(c, 0.72);
+      if (HQ()) {   // 18-bit: extra highlight/shade steps and light from the upper left
+        if (filled(x, y - 1) && !filled(x, y - 2) && filled(x, y + 1)) c = mix(c, [255, 255, 255], 0.12);
+        else if (filled(x, y - 1) && filled(x, y + 1) && !filled(x, y + 2)) c = mul(c, 0.87);
+        else if (DENS > 1 && filled(x, y - 2) && !filled(x, y - 3) && filled(x, y + 1)) c = mix(c, [255, 255, 255], 0.05);
+        const sx = flip ? x + 1 : x - 1, fx = flip ? x - 1 : x + 1;   // screen-left / screen-right neighbours
+        if (!filled(sx, y)) c = mix(c, [255, 255, 255], 0.07);
+        else if (!filled(fx, y)) c = mul(c, 0.93);
+      }
     }
-    out[y * 6 + ox] = pack(c);
+    // Eye catchlight (12 px art): the eye's top pixel on the side the light comes from.
+    if (ch === 'e' && DENS > 1 && (y === 0 || g[y - 1][x] !== 'e') && g[y][flip ? x + 1 : x - 1] !== 'e') c = [200, 210, 230];
+    out[y * T + ox] = pack(c);
+  }
+  if (HQ()) for (let y = Math.ceil(T * 2 / 3); y < T; y++) for (let x = 0; x < T; x++) {   // 18-bit: soft edges on the ground shadow
+    const i = y * T + x;
+    if (!out[i] && (x > 0 && out[i - 1] === 1 || x < T - 1 && out[i + 1] === 1)) out[i] = 2;
   }
   return out;
 }
-(function buildSprites() {
+function buildSprites() {
   for (let sp = 0; sp < 5; sp++) for (let male = 0; male < 2; male++) for (let left = 0; left < 2; left++) for (let juv = 0; juv < 2; juv++) for (let v = 0; v < NVAR; v++) {
     const pal = Object.assign({}, PAL[sp]);
     if (v === 1) pal.b = SEX_COL[male];
     else if (v >= 2) pal.b = ENERGY_COL[v - 2];
     sprites.set(buildSprite(male ? MASKS[sp].m : MASKS[sp].f, pal, !!left, !!juv), sIdx(sp, male, left, juv, v));
   }
-})();
+}
 function spriteURL(sp, male, scale, bg) {
   const c = document.createElement('canvas');
-  c.width = c.height = 6 * scale + (bg ? 2 * scale : 0);
+  const k = scale * BASE / CELL;   // same icon size at any density, more detail at 12 px
+  c.width = c.height = CELL * k + (bg ? 2 * scale : 0);
   const x = c.getContext('2d');
   if (bg) { x.fillStyle = bg; x.fillRect(0, 0, c.width, c.height); }
   const o = sIdx(sp, male, 0, 0, 0), pad = bg ? scale : 0;
-  for (let i = 0; i < 36; i++) {
-    const u = sprites[o + i]; if (u <= 1) continue;
-    x.fillStyle = unpackCss(u); x.fillRect(pad + (i % 6) * scale, pad + ((i / 6) | 0) * scale, scale, scale);
+  for (let i = 0; i < TT; i++) {
+    const u = sprites[o + i]; if (u <= 2) continue;
+    x.fillStyle = unpackCss(u); x.fillRect(pad + (i % CELL) * k, pad + ((i / CELL) | 0) * k, k, k);
   }
   return c.toDataURL();
 }
-const ICONS = SPECIES.map((s, i) => spriteURL(i, 1, 4));
-const ICONS_F = SPECIES.map((s, i) => spriteURL(i, 0, 4));
+let ICONS = [], ICONS_F = [], GUIDE_ICONS = [];
+function buildIcons() {
+  ICONS = SPECIES.map((s, i) => spriteURL(i, 1, 4));
+  ICONS_F = SPECIES.map((s, i) => spriteURL(i, 0, 4));
+  GUIDE_ICONS = SPECIES.map((s, i) => spriteURL(i, 1, 6, '#0d2a12'));
+}
+// Build (or rebuild, when the colour depth changes) every tile, sprite and icon.
+function buildArt() { buildGrass(); buildWater(); buildProps(); buildSprites(); buildIcons(); }
+buildArt();
 
 // ---------------- sound ----------------
 const Sfx = {
@@ -1794,23 +1870,40 @@ function resetCamera() { Object.assign(cam, startCam()); wheelAcc = 0; zoomBefor
 // terrainBuf holds the whole world's terrain (world px). Each frame, beginView() copies the camera's
 // window into frameBuf (VW x VH world px, top-left at VX, VY); sprites and particles are drawn on top,
 // and the window is scaled onto the map canvas with nearest-neighbour scaling.
-const terrainBuf = new Uint32Array(PW * PH);
+let terrainBuf = new Uint32Array(PW * PH);
+// Resize everything that depends on the tile size (after setDensity).
+function applyDensity() {
+  if (terrainBuf.length !== PW * PH) terrainBuf = new Uint32Array(PW * PH);
+  canvas.width = VIEW_W; canvas.height = VIEW_H;
+  Object.assign(cam, startCam());
+  lastKey.fill(-1);
+  updateCanvasScaling();
+}
+// When the screen shows fewer pixels than the map has (12 px tiles on a small screen), scale it
+// down smoothly instead of dropping pixels, which would flicker; otherwise keep pixels crisp.
+function updateCanvasScaling() {
+  const shown = canvas.getBoundingClientRect().width * (window.devicePixelRatio || 1);
+  canvas.style.imageRendering = shown && shown < VIEW_W * 0.97 ? 'auto' : 'pixelated';
+}
+window.addEventListener('resize', updateCanvasScaling);
 const viewCanvas = document.createElement('canvas'), vctx = viewCanvas.getContext('2d', { alpha: false });
 let viewImg = null, frameBuf = null, VX = 0, VY = 0, VW = 0, VH = 0;
 let PXB = 1;   // setPx block size: 2 at whole-world zoom, so 1-px lines survive the 2:1 downscale
 const lastKey = new Int32Array(W * H);
 let cellVar = new Uint8Array(W * H), waterDeep = new Uint8Array(W * H);
+canvas.width = VIEW_W; canvas.height = VIEW_H;   // the map canvas matches the starting density
 
 function prepWorldGfx() {
   lastKey.fill(-1);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x;
     cellVar[i] = (hash3(x, y, world.seed & 0xffff) * VAR) | 0;
-    let deep = 1;
+    let deep = 2;   // 0 = shore, 1 = near shore, 2 = open water
     if (world.terrain[i] === T_WATER) {
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
         const nx = x + dx, ny = y + dy;
-        if (nx >= 0 && ny >= 0 && nx < W && ny < H && world.terrain[ny * W + nx] !== T_WATER) deep = 0;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H && world.terrain[ny * W + nx] !== T_WATER)
+          deep = Math.min(deep, Math.max(Math.abs(dx), Math.abs(dy)) - 1);
       }
     }
     waterDeep[i] = deep;
@@ -1819,11 +1912,7 @@ function prepWorldGfx() {
 
 function blit(src, off, cx, cy) {
   let d = cy * CELL * PW + cx * CELL;
-  for (let py = 0; py < 6; py++, d += PW) {
-    const s = off + py * 6;
-    terrainBuf[d] = src[s]; terrainBuf[d + 1] = src[s + 1]; terrainBuf[d + 2] = src[s + 2];
-    terrainBuf[d + 3] = src[s + 3]; terrainBuf[d + 4] = src[s + 4]; terrainBuf[d + 5] = src[s + 5];
-  }
+  for (let py = 0; py < CELL; py++, d += PW) terrainBuf.set(src.subarray(off + py * CELL, off + py * CELL + CELL), d);
 }
 
 function updateTerrain() {
@@ -1839,19 +1928,22 @@ function updateTerrain() {
       off = gIdx(l, dry, v, dim); key = off; src = grassTiles;
     } else if (t === T_WATER) {
       off = wIdx((wf + v) & 3, waterDeep[i], v, dim); key = 1e7 + off; src = waterTiles;
-    } else if (t === T_TREE) { off = dim * 36; key = 2e7 + off; src = treeTile; }
-    else { off = dim * 36; key = 3e7 + off; src = rockTile; }
+    } else if (t === T_TREE) { off = dim * TT; key = 2e7 + off; src = treeTile; }
+    else { off = dim * TT; key = 3e7 + off; src = rockTile; }
     if (key !== lastKey[i]) { lastKey[i] = key; blit(src, off, cx, cy); }
   }
 }
 
-function darken(c) {
-  return ((255 << 24) | ((((c >>> 16) & 255) * 0.55) << 16) | ((((c >>> 8) & 255) * 0.55) << 8) | ((c & 255) * 0.55)) >>> 0;
+function shade(c, k) {
+  return ((255 << 24) | (Q[(((c >>> 16) & 255) * k) | 0] << 16) | (Q[(((c >>> 8) & 255) * k) | 0] << 8) | Q[((c & 255) * k) | 0]) >>> 0;
 }
+// Ground shadow under an animal: hard at 16-bit; a little lighter, with soft edges, at 18-bit.
+const darken = c => shade(c, HQ() ? 0.6 : 0.55);
+const darkenSoft = c => shade(c, 0.8);
 function blend(d, s, red) {
   let r = s & 255, g = (s >>> 8) & 255, b = (s >>> 16) & 255;
   if (red) { r = 255; g = 60; b = 60; }
-  return ((255 << 24) | ((((d >>> 16) & 255) + b) >> 1 << 16) | ((((d >>> 8) & 255) + g) >> 1 << 8) | (((d & 255) + r) >> 1)) >>> 0;
+  return ((255 << 24) | (Q[(((d >>> 16) & 255) + b) >> 1] << 16) | (Q[(((d >>> 8) & 255) + g) >> 1] << 8) | Q[((d & 255) + r) >> 1]) >>> 0;
 }
 // Start a frame: copy the camera's window of the terrain into frameBuf.
 function beginView() {
@@ -1862,21 +1954,21 @@ function beginView() {
     frameBuf = new Uint32Array(viewImg.data.buffer);
   }
   VX = r.x; VY = r.y; VW = r.w; VH = r.h;
-  PXB = CAM.zoom(cam) < 1 ? 2 : 1;
+  PXB = (CAM.zoom(cam) < 1 ? 2 : 1) * DENS;   // effects keep the same visual size at any density
   if (VW === PW) frameBuf.set(terrainBuf.subarray(VY * PW, (VY + VH) * PW));
   else for (let y = 0, s = VY * PW + VX; y < VH; y++, s += PW) frameBuf.set(terrainBuf.subarray(s, s + VW), y * VW);
 }
-// Draw a 6x6 sprite on tile (cx, cy), clipped to the view window.
+// Draw a CELL x CELL sprite on tile (cx, cy), clipped to the view window.
 function drawSprite(off, cx, cy, ghost, red) {
   const x0 = cx * CELL - VX, y0 = cy * CELL - VY;
-  const pxA = Math.max(0, -x0), pxB = Math.min(6, VW - x0), pyA = Math.max(0, -y0), pyB = Math.min(6, VH - y0);
+  const pxA = Math.max(0, -x0), pxB = Math.min(CELL, VW - x0), pyA = Math.max(0, -y0), pyB = Math.min(CELL, VH - y0);
   for (let py = pyA; py < pyB; py++) {
-    const row = (y0 + py) * VW + x0, so = off + py * 6;
+    const row = (y0 + py) * VW + x0, so = off + py * CELL;
     for (let px = pxA; px < pxB; px++) {
       const c = sprites[so + px];
       if (!c) continue;
       const idx = row + px;
-      if (c === 1) { if (!ghost) frameBuf[idx] = darken(frameBuf[idx]); }
+      if (c <= 2) { if (!ghost) frameBuf[idx] = c === 1 ? darken(frameBuf[idx]) : darkenSoft(frameBuf[idx]); }
       else frameBuf[idx] = ghost ? blend(frameBuf[idx], c, red) : c;
     }
   }
@@ -1889,12 +1981,12 @@ function setPx(x, y, c) {
     if (x < 0 || y < 0 || x >= VW || y >= VH) return;
     frameBuf[y * VW + x] = c;
   } else {
-    x &= ~1; y &= ~1;
-    if (x < 0 || y < 0 || x + 1 >= VW || y + 1 >= VH) return;
-    const i = y * VW + x;
-    frameBuf[i] = frameBuf[i + 1] = frameBuf[i + VW] = frameBuf[i + VW + 1] = c;
+    x -= ((x % PXB) + PXB) % PXB; y -= ((y % PXB) + PXB) % PXB;
+    if (x < 0 || y < 0 || x + PXB > VW || y + PXB > VH) return;
+    for (let yy = 0, i = y * VW + x; yy < PXB; yy++, i += VW) for (let xx = 0; xx < PXB; xx++) frameBuf[i + xx] = c;
   }
 }
+const setPb = (x, y, c) => setPx(x * DENS, y * DENS, c);   // effects: coordinates in 6-px base units
 function rectOutline(x0, y0, w, h, c, gapCorners) {
   for (let x = x0; x < x0 + w; x++) {
     if (gapCorners && x > x0 + 1 && x < x0 + w - 2) continue;
@@ -1906,7 +1998,9 @@ function rectOutline(x0, y0, w, h, c, gapCorners) {
   }
 }
 
-const WHITE = pack([255, 255, 255]), GOLD = pack(hex('#ffd23f')), RED = pack(hex('#ff4d5e'));
+let WHITE, GOLD, RED;
+function buildMarks() { WHITE = pack([255, 255, 255]); GOLD = pack(hex('#ffd23f')); RED = pack(hex('#ff4d5e')); }
+buildMarks();
 const HEART = ['.x.x.', 'xxxxx', '.xxx.', '..x..'];
 
 function render() {
@@ -1929,17 +2023,17 @@ function render() {
     const fade = p.life / p.max;
     if (p.kind === 'heart') {
       const c = pack(mix(hex('#ff7ac8'), [255, 255, 255], 1 - fade));
-      for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (HEART[yy][xx] === 'x') setPx(p.x + xx - 2, p.y + yy - 2, c);
+      for (let yy = 0; yy < 4; yy++) for (let xx = 0; xx < 5; xx++) if (HEART[yy][xx] === 'x') setPb(p.x + xx - 2, p.y + yy - 2, c);
     } else if (p.kind === 'ring') {
       const rad = (1 - fade) * 16 + 2, c = fade > 0.5 ? pack(hex(p.col)) : WHITE;
-      for (let k = 0; k < 28; k++) { const an = k / 28 * Math.PI * 2; setPx(p.x + Math.cos(an) * rad, p.y + Math.sin(an) * rad, c); }
+      for (let k = 0; k < 28; k++) { const an = k / 28 * Math.PI * 2; setPb(p.x + Math.cos(an) * rad, p.y + Math.sin(an) * rad, c); }
     } else if (p.kind === 'star') {
       const c = fade > 0.5 ? WHITE : pack(hex('#ffb31f')), r = Math.round((1 - fade) * 4) + 1;
-      for (let k = -r; k <= r; k++) { setPx(p.x + k, p.y, c); setPx(p.x, p.y + k, c); }
-      setPx(p.x - r + 1, p.y - r + 1, RED); setPx(p.x + r - 1, p.y + r - 1, RED); setPx(p.x + r - 1, p.y - r + 1, RED); setPx(p.x - r + 1, p.y + r - 1, RED);
+      for (let k = -r; k <= r; k++) { setPb(p.x + k, p.y, c); setPb(p.x, p.y + k, c); }
+      setPb(p.x - r + 1, p.y - r + 1, RED); setPb(p.x + r - 1, p.y + r - 1, RED); setPb(p.x + r - 1, p.y - r + 1, RED); setPb(p.x - r + 1, p.y + r - 1, RED);
     } else {
-      setPx(p.x, p.y, p.c);
-      if (p.big) { setPx(p.x + 1, p.y, p.c); setPx(p.x, p.y + 1, p.c); setPx(p.x + 1, p.y + 1, p.c); }
+      setPb(p.x, p.y, p.c);
+      if (p.big) { setPb(p.x + 1, p.y, p.c); setPb(p.x, p.y + 1, p.c); setPb(p.x + 1, p.y + 1, p.c); }
     }
   }
   // selection & ghost
@@ -1967,7 +2061,7 @@ function drawNameLabels() {
   if (cam.zi === 0 || !world || !famCounts.size) return;
   const v = CAM.visibleTiles(cam), V = world.v, L = world.live, tile = CELL * CAM.zoom(cam);
   let tags = 0, hearts = 0;
-  ctx.font = '8px "Press Start 2P", monospace';
+  ctx.font = (8 * DENS) + 'px "Press Start 2P", monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   for (let k = 0, n = world.liveN; k < n; k++) {
     const s = L[k], ax = V.x[s], ay = V.y[s];
@@ -1976,9 +2070,9 @@ function drawNameLabels() {
     if (V.named[s] && tags < 40) {
       tags++;
       const name = famNames.get(V.fam[s]) || '';
-      const w = Math.ceil(ctx.measureText(name).width) + 6, y = Math.round(p.y) - 2;
-      ctx.fillStyle = 'rgba(10,12,30,.85)'; ctx.fillRect(cx - (w >> 1), y - 11, w, 11);
-      ctx.fillStyle = '#ff7ac8'; ctx.fillRect(cx - (w >> 1), y - 1, w, 1);
+      const w = Math.ceil(ctx.measureText(name).width) + 6 * DENS, y = Math.round(p.y) - 2 * DENS;
+      ctx.fillStyle = 'rgba(10,12,30,.85)'; ctx.fillRect(cx - (w >> 1), y - 11 * DENS, w, 11 * DENS);
+      ctx.fillStyle = '#ff7ac8'; ctx.fillRect(cx - (w >> 1), y - DENS, w, DENS);
       ctx.fillStyle = '#fff'; ctx.fillText(name, cx, y - 1);
     } else if (hearts++ < 150) {
       const s = Math.max(1, Math.round(tile / 6)), hx = cx - 2 * s, hy = Math.round(p.y) - 4 * s - 1;
@@ -1991,7 +2085,7 @@ function drawNameLabels() {
 // ---------------- particles ----------------
 function spawn(kind, cx, cy, opts) {
   if (particles.length > 700 && kind !== 'ring' && kind !== 'star') return;
-  const x = cx * CELL + 3, y = cy * CELL + 3, o = opts || {};
+  const x = cx * BASE + 3, y = cy * BASE + 3, o = opts || {};   // base units (see setPb)
   switch (kind) {
     case 'birth':
       for (let i = 0; i < 4; i++) particles.push({ kind: 'px', x: x + (Math.random() * 8 - 4), y, vx: (Math.random() - 0.5) * 10, vy: -10 - Math.random() * 14, life: 0.7, max: 0.7, c: pack(hex(i % 2 ? '#fff6a8' : '#ffffff')) });
@@ -2253,7 +2347,7 @@ function buildSidebar() {
 
   $('#guide').innerHTML = SPECIES.map((s, i) => `
     <div class="card">
-      <div class="card-head"><img src="${spriteURL(i, 1, 6, '#0d2a12')}" alt="${s.name} sprite">
+      <div class="card-head"><img src="${GUIDE_ICONS[i]}" alt="${s.name} sprite">
         <div><div class="nm" style="color:${s.color}">${s.name.toUpperCase()}</div><div class="role" style="color:${s.isPrey ? 'var(--teal)' : 'var(--red)'}">${s.role.toUpperCase()}</div></div></div>
       <p>${DESC[i]}</p>
       ${Object.entries(STATS[i]).map(([k, v]) => `<div class="stat"><span>${k}</span><span class="pips">${[1, 2, 3, 4, 5].map(n => `<i class="${n <= v ? 'f' : ''}"></i>`).join('')}</span></div>`).join('')}
@@ -2385,6 +2479,24 @@ function setRunning(r) {
 }
 function setSpeed(i) { speedIdx = Math.max(0, Math.min(SPEEDS.length - 1, i)); $('#btnSpeed').textContent = `SPEED ${SPEEDS[speedIdx]}×`; }
 const VIEWS = ['NORMAL', 'SEX', 'ENERGY'];
+// Switch colour depth and pixel density together: 16-bit = 6 px tiles, 18-bit = 12 px tiles.
+// Rebuild every tile, sprite, icon and minimap colour, resize the map, keep the camera in place.
+function setDepth(d) {
+  const oldIcons = [...ICONS, ...ICONS_F, ...GUIDE_ICONS];
+  const centre = CAM.canvasToTile(cam, VIEW_W / 2, VIEW_H / 2), zi = cam.zi;
+  DEPTH = d === 16 ? 16 : 18; Q = QUANT[DEPTH];
+  storage.set('depth', DEPTH);
+  setDensity(DEPTH === 18 ? 2 : 1);
+  applyDensity();
+  CAM.setZoom(cam, zi); CAM.centerOn(cam, centre.x, centre.y); updateZoomUI();
+  particles = [];
+  buildArt(); buildMarks(); buildMinimapColours();
+  const newIcons = [...ICONS, ...ICONS_F, ...GUIDE_ICONS], swap = new Map(oldIcons.map((u, k) => [u, newIcons[k]]));
+  document.querySelectorAll('img').forEach(img => { const n = swap.get(img.getAttribute('src')); if (n) img.src = n; });
+  lastKey.fill(-1);
+  if (typeof refreshMinimapBase === 'function') refreshMinimapBase();
+  $('#btnDepth').textContent = 'COLOR: ' + DEPTH + '-BIT';
+}
 function setView(v) {
   viewMode = v % 3;
   $('#btnView').textContent = 'VIEW: ' + VIEWS[viewMode];
@@ -2397,6 +2509,8 @@ $('#btnPlay').onclick = () => { Sfx.init(); setRunning(!running); };
 $('#btnStep').onclick = () => { setRunning(false); GOL.step(world); };
 $('#btnSpeed').onclick = () => setSpeed((speedIdx + 1) % SPEEDS.length);
 $('#btnView').onclick = () => setView(viewMode + 1);
+$('#btnDepth').onclick = () => setDepth(DEPTH === 18 ? 16 : 18);
+$('#btnDepth').textContent = 'COLOR: ' + DEPTH + '-BIT';
 $('#btnSound').onclick = () => { Sfx.init(); setSound(!Sfx.on); };
 $('#btnNew').onclick = () => openTitle();
 function openHelp() { $('#helpScreen').classList.add('show'); setInert(); $('#btnCloseHelp').focus(); }
@@ -2603,6 +2717,7 @@ document.addEventListener('keydown', e => {
   else if (k === '+' || k === '=') setSpeed(speedIdx + 1);
   else if (k === '-' || k === '_') setSpeed(speedIdx - 1);
   else if (k === 'v' || k === 'V') setView(viewMode + 1);
+  else if (k === 'c' || k === 'C') setDepth(DEPTH === 18 ? 16 : 18);
   else if (k === 'm' || k === 'M') { Sfx.init(); setSound(!Sfx.on); }
   else if (k === 'n' || k === 'N') openTitle();
   else if (k === 'h' || k === 'H' || k === '?') openHelp();
@@ -2639,11 +2754,11 @@ function drawParade(dt) {
     m.x += m.speed * dt;
     if (m.x > 330) m.x = -20 - Math.random() * 40;
     const bob = (Math.floor(m.x / 3) & 1);
-    const o = sIdx(m.sp, m.male, 0, 0, 0), sc = 2, X = Math.round(m.x), Y = 30 - bob;
-    for (let i = 0; i < 36; i++) {
+    const o = sIdx(m.sp, m.male, 0, 0, 0), sc = 12 / CELL, X = Math.round(m.x), Y = 30 - bob;
+    for (let i = 0; i < TT; i++) {
       const u = sprites[o + i]; if (!u) continue;
-      pctx.fillStyle = u === 1 ? 'rgba(0,0,0,.35)' : unpackCss(u);
-      pctx.fillRect(X + (i % 6) * sc, Y + ((i / 6) | 0) * sc, sc, sc);
+      pctx.fillStyle = u === 1 ? 'rgba(0,0,0,.35)' : u === 2 ? 'rgba(0,0,0,.15)' : unpackCss(u);
+      pctx.fillRect(X + (i % CELL) * sc, Y + ((i / CELL) | 0) * sc, sc, sc);
     }
   }
 }
@@ -2965,19 +3080,21 @@ const MM_W = 160, MM_H = 100;
 const mmCanvas = $('#minimap'), mmCtx = mmCanvas.getContext('2d', { alpha: false });
 const mmImg = mmCtx.createImageData(MM_W, MM_H), mmBuf = new Uint32Array(mmImg.data.buffer);
 const mmBase = new Uint32Array(MM_W * MM_H);
-const MM_WATER = pack(hex('#2b66a6')), MM_TREE = pack(hex('#2f5e2a')), MM_ROCK = pack(hex('#878275'));
-const MM_GRASS = (() => {   // 16 steps from bare to full grass
-  const a = hex('#6b5236'), b = hex('#3c7a35');
-  return Array.from({ length: 16 }, (_, l) => pack(a.map((v, j) => Math.round(v + (b[j] - v) * l / 15))));
-})();
-const MM_SP = SPECIES.map(S => pack(hex(S.color)));
+let MM_WATER, MM_TREE, MM_ROCK, MM_GRASS, MM_SP;
+function buildMinimapColours() {   // 16 grass steps at 16-bit, 32 at 18-bit
+  MM_WATER = pack(hex('#2b66a6')); MM_TREE = pack(hex('#2f5e2a')); MM_ROCK = pack(hex('#878275'));
+  const a = hex('#6b5236'), b = hex('#3c7a35'), n = HQ() ? 32 : 16;
+  MM_GRASS = Array.from({ length: n }, (_, l) => pack(a.map((v, j) => Math.round(v + (b[j] - v) * l / (n - 1)))));
+  MM_SP = SPECIES.map(S => pack(hex(S.color)));
+}
+buildMinimapColours();
 let mmShown = false;
 function refreshMinimapBase() {
   if (!world || !mmShown) return;
   const ter = world.terrain, gr = world.grass;
   for (let my = 0, o = 0; my < MM_H; my++) for (let mx = 0; mx < MM_W; mx++, o++) {
     const i = (my * 2) * W + mx * 2, t = ter[i];
-    mmBase[o] = t === T_GRASS ? MM_GRASS[Math.max(0, Math.min(15, (gr[i] * 15 + 0.5) | 0))]
+    mmBase[o] = t === T_GRASS ? MM_GRASS[Math.max(0, Math.min(MM_GRASS.length - 1, (gr[i] * (MM_GRASS.length - 1) + 0.5) | 0))]
       : t === T_WATER ? MM_WATER : t === T_TREE ? MM_TREE : MM_ROCK;
   }
   const V = world.v, L = world.live;
@@ -3109,7 +3226,7 @@ if (DEBUG) window.golDebug = {
 buildSidebar();
 buildObjectives();
 refreshDailyChoice(); showPredStats(); updateCpuUI();
-setView(0); setSpeed(0); setSound(Sfx.on); setTool(-1);
+setView(0); setSpeed(0); setSound(Sfx.on); setTool(-1); updateCanvasScaling();
 newWorld('balanced', true);
 setRunning(false);
 setInert();

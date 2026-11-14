@@ -12,6 +12,9 @@
   if (!D) throw new Error('golDebug missing: open index.html?debug');
   const CAM = D.CAM, cv = document.querySelector('#world');
   const W = GOL.W, H = GOL.H, VIEW_W = 960, VIEW_H = 600, T_GRASS = GOL.T_GRASS;
+  // Checks work in logical 960x600 canvas px. The real canvas is DENS times bigger (12 px tiles
+  // in 18-bit mode), and so is every world-px distance.
+  const DENS = () => cv.width / VIEW_W;
   const CHECKS = window.UI_CHECKS = [];
   const add = (group, name, run) => CHECKS.push({ group, name, run });
 
@@ -32,8 +35,8 @@
   }
   // Canvas px of the centre of a tile, under the current camera.
   function tileCenter(tx, ty) {
-    const p = CAM.tileToCanvas(D.cam, tx, ty), s = 6 * CAM.zoom(D.cam);
-    return { x: p.x + s / 2, y: p.y + s / 2 };
+    const p = CAM.tileToCanvas(D.cam, tx, ty), s = 6 * CAM.zoom(D.cam), k = DENS();
+    return { x: p.x / k + s / 2, y: p.y / k + s / 2 };
   }
   // Screen px -> canvas px factor (the canvas is CSS-scaled).
   const screenToCanvas = () => VIEW_W / cv.getBoundingClientRect().width;
@@ -107,7 +110,8 @@
   // ---------- group: render (Task 3) ----------
   add('render', 'default view is 1x centred', async () => {
     check(D.cam.zi === 1, 'zi ' + D.cam.zi);
-    check(same(CAM.srcRect(D.cam), { x: 480, y: 300, w: 960, h: 600 }), JSON.stringify(CAM.srcRect(D.cam)));
+    const k = DENS();
+    check(same(CAM.srcRect(D.cam), { x: 480 * k, y: 300 * k, w: 960 * k, h: 600 * k }), JSON.stringify(CAM.srcRect(D.cam)));
   });
   add('render', 'hover maps to the tile under the pointer', async () => {
     const p = tileCenter(200, 120);
@@ -146,10 +150,11 @@
     check(same(seq, [2, 1, 0, 0]), 'zi after z,x,x,x: ' + seq);
   });
   add('zoom', 'wheel zooms toward the pointer', async () => {
-    const t = CAM.canvasToTile(D.cam, 240, 150);
-    wheel(240, 150, -120);
+    // Aim inside a tile (241, 151), not exactly on a tile edge where rounding may pick either side.
+    const t = CAM.canvasToTile(D.cam, 241 * DENS(), 151 * DENS());
+    wheel(241, 151, -120);
     check(D.cam.zi === 2, 'zi ' + D.cam.zi);
-    const u = CAM.canvasToTile(D.cam, 240, 150);
+    const u = CAM.canvasToTile(D.cam, 241 * DENS(), 151 * DENS());
     check(same(u, t), `tile under pointer ${JSON.stringify(t)} -> ${JSON.stringify(u)}`);
   });
   add('zoom', 'wheel over the map does not scroll the page', async () => {
@@ -199,7 +204,7 @@
     key('3');
     const before = injected(), x0 = CAM.srcRect(D.cam).x;
     await dragBy(480, 300, scr(40), 0, o);
-    const want = Math.round(40 * VIEW_W / cv.getBoundingClientRect().width), got = x0 - CAM.srcRect(D.cam).x;
+    const want = Math.round(40 * VIEW_W / cv.getBoundingClientRect().width * DENS()), got = x0 - CAM.srcRect(D.cam).x;
     check(injected() === before, 'a drag released a couple');
     check(Math.abs(got - want) <= 1, `window moved ${got} world px, want ${want}`);
   }
@@ -323,7 +328,7 @@
     if (!wideEnough()) return 'skipped: pane too narrow';
     CAM.panBy(D.cam, -3000, -3000);
     ptr('pointerdown', 80, 50, { target: mm() }); ptr('pointerup', 80, 50, { target: mm() });
-    const c = CAM.canvasToTile(D.cam, 480, 300);
+    const c = CAM.canvasToTile(D.cam, 480 * DENS(), 300 * DENS());
     check(c && Math.abs(c.x - 160) <= 1 && Math.abs(c.y - 100) <= 1, 'view centre tile ' + JSON.stringify(c));
   });
   add('minimap', 'minimap drag never releases animals', async () => {
@@ -334,7 +339,7 @@
     ptr('pointermove', 70, 50, { target: mm() });
     ptr('pointerup', 70, 50, { target: mm() });
     check(injected() === before, 'a minimap drag released a couple');
-    const c = CAM.canvasToTile(D.cam, 480, 300);
+    const c = CAM.canvasToTile(D.cam, 480 * DENS(), 300 * DENS());
     check(c && Math.abs(c.x - 140) <= 1 && Math.abs(c.y - 100) <= 1, 'drag did not move the view: ' + JSON.stringify(c));
   });
   add('minimap', 'hidden on narrow maps', async () => {
