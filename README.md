@@ -43,6 +43,17 @@ Every birth needs a male and a female of the same species. Young predators follo
 
 Food chains and energy pyramids · Lotka–Volterra predator–prey cycles · r- vs K-selection · carrying capacity and seasons · competition, intraguild predation and niche partitioning · prey switching · sexual reproduction, small populations and the Allee effect · trophic cascades · the Shannon biodiversity index.
 
+## 16-bit or 18-bit colour
+
+Press **C** (or the **COLOR** button) to switch the look:
+
+- **16-bit:** authentic 16-bit-console colour, 5 bits per channel (32,768 colours), with flat two-step shading.
+- **18-bit** (default): 6 bits per channel (262,144 colours), spent on smoother art: twice as many grass shades for seasonal fades, three water depths with soft sparkles, three-step sprite shading with light from the upper left, and soft-edged ground shadows.
+
+![The same lake shore at 16-bit and 18-bit](docs/colour-depth-16-vs-18.png)
+
+![The five animals at 16-bit and 18-bit](docs/sprites-16-vs-18.png)
+
 ## Multicore (for older and school PCs)
 
 The whole world lives in shared memory and every simulated day runs in parallel on all your CPU cores (up to 16 threads):
